@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "unbounded-korean"
+version = "0.1.0"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+description = "Umbrella Python bindings for Korean G2P, phonemization, and hangulization."
+
+[tool.maturin]
+module-name = "unbounded_korean"
+features = ["extension-module"]

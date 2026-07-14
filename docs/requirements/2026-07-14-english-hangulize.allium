@@ -1,0 +1,7 @@
+# english hangulize requirements
+
+default english-language-listing: bundled languages are listed → "eng" appears in list_langs output
+entity HangulizeEnglish representative-words: hangulize("eng", common English words) succeeds → returns deterministic Hangul transliterations
+entity HangulizeEnglish punctuation: hangulize("eng", text with punctuation and spaces) succeeds → preserves readable punctuation and spacing
+entity HangulizeEnglish unknown-provider-errors: English G2P provider fails → returns a hangulize-rs error instead of panicking
+entity HangulizeEnglish no-system-espeak-default: default hangulize-rs build runs English transliteration → does not require system espeak

@@ -101,6 +101,9 @@ impl Hangulizer {
                 "furigana" => {
                     out = transliterate_furigana(&out, self.spec.lang.id == "jpn")?;
                 }
+                "english_phoneme" => {
+                    out = transliterate_english_phoneme(&out)?;
+                }
                 other if other.starts_with("cyrillic[") && other.ends_with(']') => {
                     let country = &other["cyrillic[".len()..other.len() - 1];
                     out = transliterate_cyrillic(country, &out)?;
@@ -1007,6 +1010,362 @@ static FURIGANA_TOKENIZER: Lazy<Result<std::sync::Mutex<Tokenizer>>> = Lazy::new
     let segmenter = Segmenter::new(Mode::Normal, dictionary, None);
     Ok(std::sync::Mutex::new(Tokenizer::new(segmenter)))
 });
+
+static ENGLISH_G2P: Lazy<std::sync::Mutex<misaki_rs::G2P>> =
+    Lazy::new(|| std::sync::Mutex::new(misaki_rs::G2P::new(misaki_rs::Language::EnglishUS)));
+
+fn transliterate_english_phoneme(word: &str) -> Result<String> {
+    let mut out = String::new();
+    let mut segment = String::new();
+    for ch in word.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '\'' {
+            segment.push(ch);
+        } else {
+            flush_english_segment(&mut out, &mut segment)?;
+            out.push(ch);
+        }
+    }
+    flush_english_segment(&mut out, &mut segment)?;
+    Ok(out)
+}
+
+fn flush_english_segment(out: &mut String, segment: &mut String) -> Result<()> {
+    if !segment.is_empty() {
+        out.push_str(&english_segment_to_hangul(segment)?);
+        segment.clear();
+    }
+    Ok(())
+}
+
+fn english_segment_to_hangul(word: &str) -> Result<String> {
+    let g2p = ENGLISH_G2P.lock().unwrap();
+    let (phonemes, _) = g2p
+        .g2p(word)
+        .map_err(|err| Error::InvalidSpec(err.to_string()))?;
+    Ok(english_phonemes_to_hangul(&phonemes))
+}
+
+fn english_phonemes_to_hangul(phonemes: &str) -> String {
+    let mut out = String::new();
+    let mut buf = String::new();
+    for ch in phonemes.chars() {
+        if ch.is_whitespace() {
+            flush_english_word(&mut out, &mut buf);
+            out.push(ch);
+        } else if is_punct(ch) {
+            flush_english_word(&mut out, &mut buf);
+            out.push(ch);
+        } else {
+            buf.push(ch);
+        }
+    }
+    flush_english_word(&mut out, &mut buf);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn flush_english_word(out: &mut String, buf: &mut String) {
+    if !buf.is_empty() {
+        out.push_str(&english_phoneme_word_to_hangul(buf));
+        buf.clear();
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnglishUnit {
+    Consonant(char),
+    Vowel(char),
+    Letter(&'static str),
+}
+
+fn english_phoneme_word_to_hangul(word: &str) -> String {
+    let units = english_units(word);
+    if units
+        .iter()
+        .all(|unit| matches!(unit, EnglishUnit::Letter(_)))
+    {
+        return units
+            .iter()
+            .filter_map(|unit| match unit {
+                EnglishUnit::Letter(hangul) => Some(*hangul),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("");
+    }
+
+    let mut out = String::new();
+    let mut i = 0;
+    let mut pending = Vec::new();
+    while i < units.len() {
+        match units[i] {
+            EnglishUnit::Consonant(c) => {
+                pending.push(c);
+                i += 1;
+            }
+            EnglishUnit::Letter(hangul) => {
+                out.push_str(hangul);
+                i += 1;
+            }
+            EnglishUnit::Vowel(vowel) => {
+                let onset = pending.pop().unwrap_or('ㅇ');
+                let (onset, vowel) = english_onset_vowel(onset, vowel);
+                if !pending.is_empty() {
+                    out.push_str(&render_english_consonants(&pending));
+                    pending.clear();
+                }
+                let mut j = i + 1;
+                let mut after = Vec::new();
+                while j < units.len() {
+                    if let EnglishUnit::Consonant(c) = units[j] {
+                        after.push(c);
+                        j += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let next_is_vowel = j < units.len() && matches!(units[j], EnglishUnit::Vowel(_));
+                if next_is_vowel {
+                    if after == ['ㄹ'] {
+                        out.push_str(&compose_hangul(&format!("{onset}{vowel}-ㄹ")));
+                        pending.push('ㄹ');
+                    } else {
+                        out.push_str(&compose_hangul(&format!("{onset}{vowel}")));
+                        pending = after;
+                    }
+                } else if let Some((lead, tail)) = final_blend(&after) {
+                    out.push_str(&compose_hangul(&format!("{onset}{vowel}")));
+                    out.push_str(&compose_hangul(&format!("{lead}ㅡ-{tail}")));
+                    pending.clear();
+                } else {
+                    let (tail, rest) = split_final_cluster(&after);
+                    if let Some(tail) = tail {
+                        out.push_str(&compose_hangul(&format!("{onset}{vowel}-{tail}")));
+                    } else {
+                        out.push_str(&compose_hangul(&format!("{onset}{vowel}")));
+                    }
+                    if !rest.is_empty() {
+                        out.push_str(&render_english_consonants(rest));
+                    }
+                    pending.clear();
+                }
+                i = j;
+            }
+        }
+    }
+    if !pending.is_empty() {
+        out.push_str(&render_english_consonants(&pending));
+    }
+    out
+}
+
+fn english_units(word: &str) -> Vec<EnglishUnit> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < word.len() {
+        let rest = &word[i..];
+        if let Some(skip) = english_skip_len(rest) {
+            i += skip;
+            continue;
+        }
+        if rest.starts_with("o‍ʊ") || rest.starts_with("oʊ") {
+            out.push(EnglishUnit::Vowel('ㅗ'));
+            i += if rest.starts_with("o‍ʊ") {
+                "o‍ʊ".len()
+            } else {
+                "oʊ".len()
+            };
+        } else if rest.starts_with("e‍ɪ") || rest.starts_with("eɪ") {
+            out.push(EnglishUnit::Letter("에이"));
+            i += if rest.starts_with("e‍ɪ") {
+                "e‍ɪ".len()
+            } else {
+                "eɪ".len()
+            };
+        } else if rest.starts_with("a‍ɪ") || rest.starts_with("aɪ") {
+            out.push(EnglishUnit::Letter("아이"));
+            i += if rest.starts_with("a‍ɪ") {
+                "a‍ɪ".len()
+            } else {
+                "aɪ".len()
+            };
+        } else if rest.starts_with("a‍ʊ") || rest.starts_with("aʊ") {
+            out.push(EnglishUnit::Letter("아우"));
+            i += if rest.starts_with("a‍ʊ") {
+                "a‍ʊ".len()
+            } else {
+                "aʊ".len()
+            };
+        } else if rest.starts_with("ɔ‍ɪ") || rest.starts_with("ɔɪ") {
+            out.push(EnglishUnit::Letter("오이"));
+            i += if rest.starts_with("ɔ‍ɪ") {
+                "ɔ‍ɪ".len()
+            } else {
+                "ɔɪ".len()
+            };
+        } else if rest.starts_with("tʃ") {
+            out.push(EnglishUnit::Consonant('ㅊ'));
+            i += "tʃ".len();
+        } else if rest.starts_with("dʒ") {
+            out.push(EnglishUnit::Consonant('ㅈ'));
+            i += "dʒ".len();
+        } else {
+            let ch = rest.chars().next().unwrap();
+            if let Some(unit) = english_unit(ch) {
+                out.push(unit);
+            }
+            i += ch.len_utf8();
+        }
+    }
+    collapse_syllabic_schwa_l(out)
+}
+
+fn collapse_syllabic_schwa_l(units: Vec<EnglishUnit>) -> Vec<EnglishUnit> {
+    let mut out = Vec::with_capacity(units.len());
+    for (i, unit) in units.iter().copied().enumerate() {
+        let syllabic_l = matches!(unit, EnglishUnit::Vowel('ㅔ'))
+            && i > 0
+            && i + 1 == units.len() - 1
+            && matches!(units[i - 1], EnglishUnit::Consonant(_))
+            && matches!(units[i + 1], EnglishUnit::Consonant('ㄹ'));
+        if !syllabic_l {
+            out.push(unit);
+        }
+    }
+    out
+}
+
+fn english_skip_len(rest: &str) -> Option<usize> {
+    rest.chars().next().and_then(|ch| {
+        if matches!(
+            ch,
+            'ˈ' | 'ˌ' | 'ː' | '\u{200d}' | '\u{200c}' | '\u{0361}' | 'ᵊ'
+        ) {
+            Some(ch.len_utf8())
+        } else {
+            None
+        }
+    })
+}
+
+fn english_unit(ch: char) -> Option<EnglishUnit> {
+    Some(match ch {
+        'A' => EnglishUnit::Letter("에이"),
+        'B' => EnglishUnit::Letter("비"),
+        'C' => EnglishUnit::Letter("시"),
+        'D' => EnglishUnit::Letter("디"),
+        'E' => EnglishUnit::Letter("이"),
+        'F' => EnglishUnit::Letter("에프"),
+        'G' => EnglishUnit::Letter("지"),
+        'H' => EnglishUnit::Letter("에이치"),
+        'I' => EnglishUnit::Letter("아이"),
+        'J' => EnglishUnit::Letter("제이"),
+        'K' => EnglishUnit::Letter("케이"),
+        'L' => EnglishUnit::Letter("엘"),
+        'M' => EnglishUnit::Letter("엠"),
+        'N' => EnglishUnit::Letter("엔"),
+        'O' => EnglishUnit::Letter("오"),
+        'P' => EnglishUnit::Letter("피"),
+        'Q' => EnglishUnit::Letter("큐"),
+        'R' => EnglishUnit::Letter("아르"),
+        'S' => EnglishUnit::Letter("에스"),
+        'T' => EnglishUnit::Letter("티"),
+        'U' => EnglishUnit::Letter("유"),
+        'V' => EnglishUnit::Letter("브이"),
+        'W' => EnglishUnit::Letter("더블유"),
+        'X' => EnglishUnit::Letter("엑스"),
+        'Y' => EnglishUnit::Letter("와이"),
+        'Z' => EnglishUnit::Letter("지"),
+        'æ' => EnglishUnit::Vowel('ㅐ'),
+        'ɛ' | 'ə' => EnglishUnit::Vowel('ㅔ'),
+        'ɜ' | 'ʌ' | 'ɔ' => EnglishUnit::Vowel('ㅓ'),
+        'ɑ' | 'a' => EnglishUnit::Vowel('ㅏ'),
+        'i' | 'ɪ' => EnglishUnit::Vowel('ㅣ'),
+        'u' | 'ʊ' => EnglishUnit::Vowel('ㅜ'),
+        'o' => EnglishUnit::Vowel('ㅗ'),
+        'ɡ' | 'g' => EnglishUnit::Consonant('ㄱ'),
+        'k' => EnglishUnit::Consonant('ㅋ'),
+        't' => EnglishUnit::Consonant('ㅌ'),
+        'd' => EnglishUnit::Consonant('ㄷ'),
+        'p' => EnglishUnit::Consonant('ㅍ'),
+        'b' => EnglishUnit::Consonant('ㅂ'),
+        'f' | 'v' => EnglishUnit::Consonant('ㅍ'),
+        's' | 'θ' => EnglishUnit::Consonant('ㅅ'),
+        'z' | 'ð' => EnglishUnit::Consonant('ㅈ'),
+        'ʃ' => EnglishUnit::Consonant('ㅅ'),
+        'ʒ' => EnglishUnit::Consonant('ㅈ'),
+        'h' => EnglishUnit::Consonant('ㅎ'),
+        'm' => EnglishUnit::Consonant('ㅁ'),
+        'n' => EnglishUnit::Consonant('ㄴ'),
+        'ŋ' => EnglishUnit::Consonant('ㅇ'),
+        'l' | 'ɫ' | 'r' | 'ɹ' => EnglishUnit::Consonant('ㄹ'),
+        'w' => EnglishUnit::Consonant('W'),
+        'j' => EnglishUnit::Consonant('Y'),
+        _ => return None,
+    })
+}
+
+fn english_onset_vowel(onset: char, vowel: char) -> (char, char) {
+    match (onset, vowel) {
+        ('W', 'ㅏ') => ('ㅇ', 'ㅘ'),
+        ('W', 'ㅐ' | 'ㅔ') => ('ㅇ', 'ㅞ'),
+        ('W', 'ㅓ') => ('ㅇ', 'ㅝ'),
+        ('W', 'ㅣ') => ('ㅇ', 'ㅟ'),
+        ('W', 'ㅜ') => ('ㅇ', 'ㅜ'),
+        ('Y', 'ㅏ') => ('ㅇ', 'ㅑ'),
+        ('Y', 'ㅓ' | 'ㅔ') => ('ㅇ', 'ㅖ'),
+        ('Y', 'ㅗ') => ('ㅇ', 'ㅛ'),
+        ('Y', 'ㅜ') => ('ㅇ', 'ㅠ'),
+        ('Y', 'ㅣ') => ('ㅇ', 'ㅣ'),
+        (other, vowel) => (other, vowel),
+    }
+}
+
+fn final_blend(cluster: &[char]) -> Option<(char, char)> {
+    match cluster {
+        ['ㅍ', 'ㄹ'] => Some(('ㅍ', 'ㄹ')),
+        ['ㅂ', 'ㄹ'] => Some(('ㅂ', 'ㄹ')),
+        ['ㄱ', 'ㄹ'] => Some(('ㄱ', 'ㄹ')),
+        ['ㅋ', 'ㄹ'] => Some(('ㅋ', 'ㄹ')),
+        _ => None,
+    }
+}
+
+fn split_final_cluster(cluster: &[char]) -> (Option<char>, &[char]) {
+    if let Some((first, rest)) = cluster.split_first()
+        && is_english_tail(*first)
+    {
+        (Some(english_tail(*first)), rest)
+    } else {
+        (None, cluster)
+    }
+}
+
+fn is_english_tail(ch: char) -> bool {
+    matches!(
+        ch,
+        'ㄱ' | 'ㅋ' | 'ㄴ' | 'ㄷ' | 'ㄹ' | 'ㅁ' | 'ㅂ' | 'ㅍ' | 'ㅅ' | 'ㅇ'
+    )
+}
+
+fn english_tail(ch: char) -> char {
+    match ch {
+        'ㅋ' => 'ㄱ',
+        'ㅍ' => 'ㅂ',
+        'ㅌ' | 'ㄷ' => 'ㅅ',
+        other => other,
+    }
+}
+
+fn render_english_consonants(consonants: &[char]) -> String {
+    consonants
+        .iter()
+        .map(|ch| match ch {
+            'W' => "우".to_string(),
+            'Y' => "이".to_string(),
+            ch => compose_hangul(&format!("{ch}ㅡ")),
+        })
+        .collect()
+}
 
 fn transliterate_furigana(word: &str, trim_terminal_long_vowels: bool) -> Result<String> {
     let word = repeat_kana(&word.nfc().collect::<String>());

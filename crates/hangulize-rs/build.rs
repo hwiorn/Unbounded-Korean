@@ -5,6 +5,7 @@ use std::path::PathBuf;
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let specs_dir = manifest_dir.join("src/specs");
+    println!("cargo:rerun-if-changed={}", specs_dir.display());
     let mut entries = fs::read_dir(&specs_dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())

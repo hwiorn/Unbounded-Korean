@@ -8,6 +8,7 @@ fn lists_bundled_languages_sorted() {
     assert!(langs.contains(&"ita".to_string()));
     assert!(langs.contains(&"jpn".to_string()));
     assert!(langs.contains(&"rus".to_string()));
+    assert!(langs.contains(&"eng".to_string()));
 }
 
 #[test]
@@ -47,6 +48,18 @@ fn hangulizes_cyrillic_translit_examples() {
     assert_eq!(hangulize("bul", "Пловдив").unwrap(), "플로브디프");
     assert_eq!(hangulize("mkd", "Кичево").unwrap(), "키체보");
     assert_eq!(hangulize("ukr", "Київ").unwrap(), "키이우");
+}
+
+#[test]
+fn hangulizes_english_examples() {
+    assert_eq!(hangulize("eng", "hello").unwrap(), "헬로");
+    assert_eq!(hangulize("eng", "world").unwrap(), "월드");
+    assert_eq!(hangulize("eng", "google").unwrap(), "구글");
+    assert_eq!(hangulize("eng", "apple").unwrap(), "애플");
+    assert_eq!(hangulize("eng", "coffee").unwrap(), "커피");
+    assert_eq!(hangulize("eng", "text").unwrap(), "텍스트");
+    assert_eq!(hangulize("eng", "AI").unwrap(), "에이아이");
+    assert_eq!(hangulize("eng", "hello, world!").unwrap(), "헬로, 월드!");
 }
 
 #[test]

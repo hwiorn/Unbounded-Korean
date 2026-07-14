@@ -1,0 +1,20 @@
+lang:
+    id       = "eng"
+    codes    = "en", "eng"
+    english  = "English"
+    korean   = "영어"
+    script   = "Latn"
+    translit = "english_phoneme"
+
+config:
+    stage = "draft"
+
+test:
+    "hello"         -> "헬로"
+    "world"         -> "월드"
+    "google"        -> "구글"
+    "apple"         -> "애플"
+    "coffee"        -> "커피"
+    "text"          -> "텍스트"
+    "AI"            -> "에이아이"
+    "hello, world!" -> "헬로, 월드!"

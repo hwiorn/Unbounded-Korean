@@ -1,0 +1,7 @@
+# unbounded korean umbrella requirements
+
+entity RustCrate root-name: rust users depend on root crate → package name is "unbounded-korean" and library crate is importable as unbounded_korean
+entity RustCrate reexports: rust user imports unbounded_korean → g2pk, korean_phonemizer, and hangulize_rs APIs are reachable
+entity PythonPackage distribution: python package is built → distribution metadata name is "unbounded-korean"
+entity PythonPackage module: python user imports unbounded_korean → G2p, KoreanPhonemizer, Hangulizer, g2p, phonemize_ko, hangulize, and list_langs are available
+entity ExistingBindings compatibility: existing dedicated PyO3 crates are built → g2pk_rs, korean_phonemizer, and hangulize_rs modules remain available

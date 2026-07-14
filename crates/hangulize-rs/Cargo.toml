@@ -10,6 +10,7 @@ name = "hangulize_rs"
 [dependencies]
 once_cell.workspace = true
 pinyin.workspace = true
+misaki-rs.workspace = true
 regex.workspace = true
 lindera.workspace = true
 thiserror.workspace = true
