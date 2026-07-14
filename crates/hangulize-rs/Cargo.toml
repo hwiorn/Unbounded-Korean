@@ -9,7 +9,9 @@ name = "hangulize_rs"
 
 [dependencies]
 once_cell.workspace = true
+pinyin.workspace = true
 regex.workspace = true
+lindera.workspace = true
 thiserror.workspace = true
 unicode-normalization.workspace = true
 serde_json.workspace = true

@@ -2,7 +2,12 @@ mod specs_generated {
     include!(concat!(env!("OUT_DIR"), "/specs_generated.rs"));
 }
 
+use lindera::dictionary::load_dictionary;
+use lindera::mode::Mode;
+use lindera::segmenter::Segmenter;
+use lindera::tokenizer::Tokenizer;
 use once_cell::sync::Lazy;
+use pinyin::ToPinyin;
 use regex::{Captures, Regex};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -90,14 +95,18 @@ impl Hangulizer {
         let mut out = word.to_string();
         for scheme in &self.spec.lang.translit {
             match scheme.as_str() {
-                "pinyin" | "furigana" => {}
+                "pinyin" => {
+                    out = transliterate_pinyin(&out);
+                }
+                "furigana" => {
+                    out = transliterate_furigana(&out, self.spec.lang.id == "jpn")?;
+                }
                 other if other.starts_with("cyrillic[") && other.ends_with(']') => {
                     let country = &other["cyrillic[".len()..other.len() - 1];
                     out = transliterate_cyrillic(country, &out)?;
                 }
                 other => return Err(Error::TranslitNotAvailable(other.to_string())),
             }
-            out = out.replace('\u{200b}', "");
         }
         Ok(out)
     }
@@ -121,7 +130,7 @@ impl Hangulizer {
         let mut rep = Replacer::new(word, 0, 1);
         for (i, ch) in word.char_indices() {
             let end = i + ch.len_utf8();
-            if self.spec.script.is(ch) || is_space_only(ch) {
+            if self.spec.script.is(ch) || is_rule_separator(ch) || is_space_only(ch) {
                 rep.replace(i, end, &ch.to_string());
             }
         }
@@ -132,12 +141,16 @@ impl Hangulizer {
         let mut builder = SubwordBuilder::default();
         for sw in subwords {
             let mut word = sw.word;
-            let mut rep = Replacer::new(&word, sw.level, 1);
+            let mut levels = vec![sw.level; word.len()];
             for rule in &self.spec.rewrite {
                 let repls = rule.replacements(&word)?;
+                let mut rep = Replacer::with_levels(&word, levels, 1);
                 rep.replace_by(repls);
-                word = rep.string();
+                let parts = rep.into_parts();
+                word = parts.0;
+                levels = parts.1;
             }
+            let mut rep = Replacer::with_levels(&word, levels, 1);
             builder.write(rep.subwords());
         }
         Ok(builder.subwords())
@@ -837,7 +850,9 @@ impl Script {
 
     fn is(&self, ch: char) -> bool {
         match self {
-            Self::Latn => matches!(ch as u32, 0x0041..=0x007a | 0x00c0..=0x024f | 0x1e00..=0x1eff),
+            Self::Latn => {
+                matches!(ch as u32, 0x0041..=0x007a | 0x00c0..=0x02af | 0x1e00..=0x1eff)
+            }
             Self::Cyrl => {
                 matches!(ch as u32, 0x0300..=0x036f | 0x0400..=0x052f | 0x2de0..=0x2dff | 0xa640..=0xa69f)
             }
@@ -888,6 +903,10 @@ impl Script {
 
 fn is_space_only(ch: char) -> bool {
     ch.is_whitespace()
+}
+
+fn is_rule_separator(ch: char) -> bool {
+    matches!(ch, '-' | '\'' | '’')
 }
 
 fn is_punct(ch: char) -> bool {
@@ -965,6 +984,209 @@ static CYRILLIC_REPLACERS: Lazy<Result<HashMap<String, StringMapReplacer>>> = La
     }
     Ok(out)
 });
+
+fn transliterate_pinyin(word: &str) -> String {
+    let word = word.nfc().collect::<String>();
+    let mut out = String::new();
+    for ch in word.chars() {
+        if let Some(py) = ch.to_pinyin() {
+            if !out.is_empty() {
+                out.push('\u{200b}');
+            }
+            out.push_str(py.plain());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+static FURIGANA_TOKENIZER: Lazy<Result<std::sync::Mutex<Tokenizer>>> = Lazy::new(|| {
+    let dictionary =
+        load_dictionary("embedded://ipadic").map_err(|err| Error::InvalidSpec(err.to_string()))?;
+    let segmenter = Segmenter::new(Mode::Normal, dictionary, None);
+    Ok(std::sync::Mutex::new(Tokenizer::new(segmenter)))
+});
+
+fn transliterate_furigana(word: &str, trim_terminal_long_vowels: bool) -> Result<String> {
+    let word = repeat_kana(&word.nfc().collect::<String>());
+    let mut out = String::new();
+    let mut segment = String::new();
+    for ch in word.chars() {
+        if ch.is_whitespace() {
+            if !segment.is_empty() {
+                out.push_str(&transliterate_furigana_segment(
+                    &segment,
+                    trim_terminal_long_vowels,
+                )?);
+                segment.clear();
+            }
+            out.push(ch);
+        } else {
+            segment.push(ch);
+        }
+    }
+    if !segment.is_empty() {
+        out.push_str(&transliterate_furigana_segment(
+            &segment,
+            trim_terminal_long_vowels,
+        )?);
+    }
+    Ok(out)
+}
+
+fn repeat_kana(word: &str) -> String {
+    let mut out = String::new();
+    let mut last_kana = None;
+    for ch in word.chars() {
+        let repeated = match ch {
+            'ゝ' | 'ヽ' => last_kana,
+            'ゞ' | 'ヾ' => last_kana.and_then(voiced_kana).or(last_kana),
+            _ => None,
+        };
+        if let Some(rep) = repeated {
+            out.push(rep);
+            last_kana = Some(rep);
+        } else {
+            out.push(ch);
+            if is_kana(ch) {
+                last_kana = Some(ch);
+            }
+        }
+    }
+    out
+}
+
+fn is_kana(ch: char) -> bool {
+    matches!(ch as u32, 0x3040..=0x30ff)
+}
+
+fn voiced_kana(ch: char) -> Option<char> {
+    Some(match ch {
+        'か' => 'が',
+        'き' => 'ぎ',
+        'く' => 'ぐ',
+        'け' => 'げ',
+        'こ' => 'ご',
+        'さ' => 'ざ',
+        'し' => 'じ',
+        'す' => 'ず',
+        'せ' => 'ぜ',
+        'そ' => 'ぞ',
+        'た' => 'だ',
+        'ち' => 'ぢ',
+        'つ' => 'づ',
+        'て' => 'で',
+        'と' => 'ど',
+        'は' => 'ば',
+        'ひ' => 'び',
+        'ふ' => 'ぶ',
+        'へ' => 'べ',
+        'ほ' => 'ぼ',
+        'カ' => 'ガ',
+        'キ' => 'ギ',
+        'ク' => 'グ',
+        'ケ' => 'ゲ',
+        'コ' => 'ゴ',
+        'サ' => 'ザ',
+        'シ' => 'ジ',
+        'ス' => 'ズ',
+        'セ' => 'ゼ',
+        'ソ' => 'ゾ',
+        'タ' => 'ダ',
+        'チ' => 'ヂ',
+        'ツ' => 'ヅ',
+        'テ' => 'デ',
+        'ト' => 'ド',
+        'ハ' => 'バ',
+        'ヒ' => 'ビ',
+        'フ' => 'ブ',
+        'ヘ' => 'ベ',
+        'ホ' => 'ボ',
+        _ => return None,
+    })
+}
+
+fn transliterate_furigana_segment(word: &str, trim_terminal_long_vowels: bool) -> Result<String> {
+    let tokenizer = FURIGANA_TOKENIZER
+        .as_ref()
+        .map_err(|err| Error::InvalidSpec(err.to_string()))?;
+    let guard = tokenizer.lock().unwrap();
+    let mut tokens = guard
+        .tokenize(word)
+        .map_err(|err| Error::InvalidSpec(err.to_string()))?;
+    let mut out = String::new();
+    let mut previous_was_family_name = false;
+    for token in tokens.iter_mut() {
+        let surface = token.surface.as_ref().to_string();
+        let details = token.details();
+        let is_person_name = details.get(2) == Some(&"人名");
+        let is_proper_noun =
+            details.first() == Some(&"名詞") && details.get(1) == Some(&"固有名詞");
+        let is_family_name = is_person_name && details.get(3) == Some(&"姓");
+        let is_given_name = is_person_name && details.get(3) == Some(&"名");
+        if !out.is_empty() {
+            if previous_was_family_name && (is_given_name || is_proper_noun) {
+                out.push(' ');
+            }
+        }
+        let reading = details
+            .get(8)
+            .or_else(|| details.get(7))
+            .copied()
+            .filter(|reading| !reading.is_empty() && *reading != "*")
+            .unwrap_or(&surface);
+        let reading = if trim_terminal_long_vowels {
+            trim_terminal_katakana_long_vowel(reading)
+        } else {
+            reading.to_string()
+        };
+        if details.first() == Some(&"助詞") && matches!(surface.as_str(), "は" | "へ") {
+            out.push_str(&surface);
+        } else if details.first() == Some(&"助動詞")
+            && surface == "う"
+            && out.chars().last().is_some_and(is_katakana_o_row)
+        {
+        } else if details.first() == Some(&"助動詞") && surface.ends_with("しい") {
+            out.push_str(reading.strip_suffix('イ').unwrap_or(&reading));
+        } else {
+            out.push_str(&reading);
+        }
+        previous_was_family_name = is_family_name;
+    }
+    Ok(out)
+}
+
+fn trim_terminal_katakana_long_vowel(reading: &str) -> String {
+    if reading.ends_with("ュウ") {
+        reading.trim_end_matches('ウ').to_string()
+    } else if reading.ends_with("シィ") {
+        reading.trim_end_matches('ィ').to_string()
+    } else {
+        reading.to_string()
+    }
+}
+
+fn is_katakana_o_row(ch: char) -> bool {
+    matches!(
+        ch,
+        'オ' | 'コ'
+            | 'ゴ'
+            | 'ソ'
+            | 'ゾ'
+            | 'ト'
+            | 'ド'
+            | 'ノ'
+            | 'ホ'
+            | 'ボ'
+            | 'ポ'
+            | 'モ'
+            | 'ヨ'
+            | 'ョ'
+            | 'ロ'
+            | 'ヲ'
+    )
+}
 
 fn transliterate_cyrillic(country: &str, word: &str) -> Result<String> {
     let replacers = CYRILLIC_REPLACERS
@@ -1353,5 +1575,75 @@ mod tests {
         let parsed = parse_hsl("lang:\n id = \"x\"\ntranscribe:\n \"a\" -> \"ㅏ\"\n").unwrap();
         assert!(parsed.contains_key("lang"));
         assert!(parsed.contains_key("transcribe"));
+    }
+
+    #[test]
+    fn hre_lookahead_matches_without_consuming() {
+        let mut macros = HashMap::new();
+        macros.insert("@".to_string(), "<vowels>".to_string());
+        let mut vars = HashMap::new();
+        vars.insert(
+            "vowels".to_string(),
+            vec!["a".to_string(), "A".to_string(), "e".to_string()],
+        );
+        let rule = Rule {
+            from: Pattern::new("S{@}", &macros, &vars).unwrap(),
+            to: RPattern::new("sY", &macros, &vars),
+        };
+        let repls = rule.replacements("SAmkir").unwrap();
+        assert_eq!(repls.len(), 1);
+        assert_eq!(repls[0].start, 0);
+        assert_eq!(repls[0].stop, 1);
+        assert_eq!(repls[0].word, "sY");
+    }
+
+    #[test]
+    fn aze_normalization_preserves_custom_letters() {
+        let spec = Spec::parse(include_str!("specs/aze.hsl")).unwrap();
+        let h = Hangulizer {
+            spec: Arc::new(spec),
+        };
+        assert_eq!(h.normalize("Şəmkir"), "şəmkir");
+    }
+
+    #[test]
+    fn aze_rewrite_handles_s_before_schwa() {
+        let spec = Spec::parse(include_str!("specs/aze.hsl")).unwrap();
+        let h = Hangulizer {
+            spec: Arc::new(spec),
+        };
+        let order = h
+            .spec
+            .rewrite
+            .iter()
+            .map(|rule| rule.from.expr.as_str())
+            .take(8)
+            .collect::<Vec<_>>();
+        assert_eq!(order, vec!["-", "ə", "ç", "ğ", "ı", "ö", "ş", "ü"]);
+        let s_lookahead = h
+            .spec
+            .rewrite
+            .iter()
+            .find(|rule| rule.from.expr == "S{@}")
+            .unwrap();
+        assert_eq!(s_lookahead.replacements("SAmkir").unwrap().len(), 1);
+        let normalized = h.normalize("Şəmkir");
+        let mut word = normalized.clone();
+        for rule in &h.spec.rewrite {
+            let repls = rule.replacements(&word).unwrap();
+            let mut rep = Replacer::new(&word, 1, 1);
+            rep.replace_by(repls);
+            word = rep.string();
+            if rule.from.expr == "ş" {
+                assert_eq!(word, "SAmkir");
+            }
+            if rule.from.expr == "S{@}" {
+                assert_eq!(word, "sYAmkir");
+                break;
+            }
+        }
+        let rewritten = h.rewrite(h.partition(&normalized)).unwrap();
+        let joined = rewritten.into_iter().map(|sw| sw.word).collect::<String>();
+        assert!(joined.starts_with("sYAm"), "{joined}");
     }
 }
