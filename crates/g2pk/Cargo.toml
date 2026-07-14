@@ -1,0 +1,11 @@
+[package]
+name = "g2pk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lindera.workspace = true
+once_cell.workspace = true
+regex.workspace = true
+thiserror.workspace = true

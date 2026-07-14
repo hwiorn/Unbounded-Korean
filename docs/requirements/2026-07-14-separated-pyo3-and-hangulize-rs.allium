@@ -1,0 +1,8 @@
+# separated pyo3 modules and hangulize-rs requirements
+
+entity KoreanPhonemizerPy module-boundary: Python imports korean_phonemizer → phonemizer functions are available without importing g2pk_rs
+entity HangulizePy module-boundary: Python imports hangulize_rs → hangulize functions are available without importing g2pk_rs
+entity HangulizeRs bundled-languages: list_langs is called → bundled language ids are returned in sorted order
+entity HangulizeRs italian-example: hangulize is called with lang ita and word Cappuccino → returns 카푸치노
+entity HangulizeRs unknown-language: hangulize is called with an unsupported language → returns a typed spec-not-found error
+entity HangulizeRs punctuation: hangulize preserves non-script punctuation → slash and comma remain visible in output

@@ -1,0 +1,13 @@
+# g2pk-rs complete port requirements
+
+default core-convert: Korean text is passed to G2p::convert → returns pronounced Korean text using embedded resources
+default python-convert: Python calls g2pk_rs.G2p()(text) → returns the same text as the Rust default converter
+default custom-resources: G2p is created with custom table or idioms → matching custom resources override embedded resources for that instance
+default no-general-origin-notes: generated project docs and code comments describe behavior → general origin notes are not exposed
+entity CoreConverter numerals: Arabic numerals appear in input → output contains Korean number words
+entity CoreConverter options: group_vowels or to_syl options are set → output reflects those options without changing the default behavior
+entity CoreConverter morphology: POS-sensitive forms are processed → morphology annotations affect pronunciation where supported
+entity KoreanPhonemizer default-mode: phonemize_ko is called with default options → returns spoken Korean and IPA text
+entity KoreanPhonemizer ipa-style: ipa_style is combining or simplified → output uses the selected IPA representation
+entity KoreanPhonemizer invalid-options: unsupported mode or IPA style is requested → returns an explicit error
+entity PythonModule errors: Rust conversion returns an error → Python receives a Python exception instead of a panic

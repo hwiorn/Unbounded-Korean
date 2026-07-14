@@ -1,0 +1,19 @@
+[package]
+name = "g2pk-py"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
+
+[lib]
+name = "g2pk_rs"
+crate-type = ["cdylib", "rlib"]
+test = false
+doctest = false
+
+[dependencies]
+g2pk.workspace = true
+pyo3.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "korean_phonemizer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+g2pk.workspace = true
+once_cell.workspace = true
+rsepitran.workspace = true
+thiserror.workspace = true
