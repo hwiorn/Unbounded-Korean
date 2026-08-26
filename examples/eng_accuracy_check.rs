@@ -24,25 +24,24 @@ fn main() {
     }
     let total = truth.len();
     let mut correct = 0;
-    let mut sample_wrong = Vec::new();
+    let mut all_wrong = Vec::new();
     for (word, expected) in &truth {
         match korean_transliteration::transliterate("eng", word) {
             Ok(actual) if &actual == expected => correct += 1,
-            Ok(actual) => {
-                if sample_wrong.len() < 40 {
-                    sample_wrong.push(format!("{word}: expected {expected}, got {actual}"));
-                }
-            }
-            Err(_) => {
-                if sample_wrong.len() < 40 {
-                    sample_wrong.push(format!("{word}: ERROR (no path)"));
-                }
-            }
+            Ok(actual) => all_wrong.push((word.clone(), expected.clone(), actual)),
+            Err(_) => all_wrong.push((word.clone(), expected.clone(), "<ERROR>".to_string())),
         }
     }
     println!("korean_go.tsv (single-word entries): {correct}/{total} = {:.1}%", 100.0 * correct as f64 / total as f64);
     println!("--- sample mismatches ---");
-    for s in &sample_wrong {
-        println!("{s}");
+    for (word, expected, actual) in all_wrong.iter().take(40) {
+        println!("{word}: expected {expected}, got {actual}");
     }
+    let dump_path = "target/eng_mismatches.tsv";
+    let mut dump = String::new();
+    for (word, expected, actual) in &all_wrong {
+        dump.push_str(&format!("{word}\t{expected}\t{actual}\n"));
+    }
+    fs::write(dump_path, dump).unwrap();
+    println!("--- full mismatch dump: {} rows -> {dump_path} ---", all_wrong.len());
 }
