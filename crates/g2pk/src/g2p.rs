@@ -116,4 +116,17 @@ mod tests {
         assert!(out.contains("파일"));
         assert!(out.contains("세개"));
     }
+
+    #[test]
+    fn converts_fyro_hotword_words_through_full_pipeline() {
+        // handoff/2026-08-26-fyro-hotword-english-readings.md: fyro-realtime's
+        // hotword_readings.rs calls this exact entry point, lowercased, and
+        // registers the result only when every char is Hangul. Both outputs
+        // are all-Hangul, so fyro registers them either way; see
+        // english.rs's converts_mileage_using_cmudicts_primary_pronunciation
+        // for why "mileage" lands on 마일러지 rather than the doc's 마일리지.
+        let g2p = G2p::new().unwrap();
+        assert_eq!(g2p.convert("bliss").unwrap(), "블리스");
+        assert_eq!(g2p.convert("mileage").unwrap(), "마일러지");
+    }
 }

@@ -67,7 +67,17 @@ pub fn compose(text: &str) -> String {
     while i < chars.len() {
         let ch = chars[i];
         if is_vowel(ch) {
-            out.push('ᄋ');
+            let tail = if i + 1 < chars.len() && is_tail(chars[i + 1]) {
+                Some(chars[i + 1])
+            } else {
+                None
+            };
+            if let Some(syl) = compose_jamo('ᄋ', ch, tail) {
+                out.push(syl);
+                i += if tail.is_some() { 2 } else { 1 };
+                continue;
+            }
+            out.push(ch);
             i += 1;
             continue;
         }
@@ -113,5 +123,14 @@ mod tests {
     fn decomposes_and_composes_hangul() {
         assert_eq!(decompose("한글"), "한글");
         assert_eq!(compose("한글"), "한글");
+    }
+
+    #[test]
+    fn composes_bare_leading_vowel_with_silent_lead() {
+        // A jamo run with no lead consonant before a vowel (e.g. the English
+        // phoneme AE by itself, as in the first sound of "app") must get the
+        // silent lead consonant U+110B, not lose the vowel entirely.
+        assert_eq!(compose("\u{1162}"), "\u{C560}"); // bare AE vowel -> 애
+        assert_eq!(compose("\u{1162}\u{11B8}"), "\u{C571}"); // bare vowel + tail P -> 앱
     }
 }
