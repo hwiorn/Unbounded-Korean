@@ -78,7 +78,9 @@ fn is_recognized_phoneme_char(c: char) -> bool {
 }
 
 fn is_clean_word(word: &str) -> bool {
-    !word.is_empty() && word.chars().all(|c| c.is_ascii_alphabetic() || c == '\'')
+    // Unicode-aware, not ASCII-only: German (Königen, Fräulein), and every other
+    // Latin-script language beyond English, routinely need diacritics.
+    !word.is_empty() && word.chars().all(|c| c.is_alphabetic() || c == '\'')
 }
 
 /// Korean ㅈ/ㅊ/ㅉ are alveolo-palatal affricates in korean_phonemizer's IPA output --
@@ -264,5 +266,13 @@ mod tests {
         // there is no voiceless/voiced pair to correct here.
         let (filtered, _) = hangul_to_ipa("커피").unwrap();
         assert_eq!(filtered, "k ʌ p i");
+    }
+
+    #[test]
+    fn accepts_words_with_non_ascii_letters_but_rejects_multi_word_phrases() {
+        assert!(is_clean_word("Königen"));
+        assert!(is_clean_word("Fräulein"));
+        assert!(!is_clean_word("Guido van Rossum"));
+        assert!(!is_clean_word(""));
     }
 }
