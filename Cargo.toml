@@ -51,6 +51,7 @@ g2pk.workspace = true
 korean_phonemizer.workspace = true
 hangulize-rs.workspace = true
 korean-transliteration.workspace = true
+pinyin.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
