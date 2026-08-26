@@ -8,10 +8,18 @@
 # session's plan.
 #
 # Usage: train_phonetisaurus.sh <lang> [--dry-run]
+# TRAIN_NGRAM_ORDER=<n> overrides the joint n-gram order. Default is 6, not the 8 the
+# high-level `phonetisaurus train` CLI hardcodes: an order 4/5/6/8 comparison on this
+# corpus (2026-08-26) found order 6 tracks order 8's output almost exactly (a handful
+# of already-imperfect longer words differ, none clearly worse) while cutting the
+# shipped model from 37.8MB to 21.3MB gzipped -- order 8's extra context mostly wasn't
+# earning its size on this vocabulary. See docs/plans/2026-08-26-
+# korean-transliteration-plan.md for the full comparison.
 set -euo pipefail
 
 REMOTE_HOST="${TRAIN_REMOTE_HOST:-gglee@rares01.rapeech.intra}"
 REMOTE_REPO_URL="${TRAIN_REMOTE_REPO_URL:-git@github.com:hwiorn/Unbounded-Korean.git}"
+NGRAM_ORDER="${TRAIN_NGRAM_ORDER:-6}"
 LANG_CODE="${1:?usage: train_phonetisaurus.sh <lang> [--dry-run]}"
 MODE="${2:-}"
 
@@ -19,7 +27,7 @@ if [ "$MODE" = "--dry-run" ]; then
   echo "[dry-run] would push current branch to origin"
   echo "[dry-run] would ssh ${REMOTE_HOST} and clone/pull ${REMOTE_REPO_URL}"
   echo "[dry-run] would docker build -f docker/phonetisaurus-train.Dockerfile"
-  echo "[dry-run] would align+estimate+convert data/corpus/${LANG_CODE}.dict -> data/${LANG_CODE}.fst (seq2_max=3)"
+  echo "[dry-run] would align+estimate+convert data/corpus/${LANG_CODE}.dict -> data/${LANG_CODE}.fst (seq2_max=3, ngram_order=${NGRAM_ORDER})"
   echo "[dry-run] would commit+push data/${LANG_CODE}.fst from the remote host"
   echo "[dry-run] would git pull the result back locally"
   exit 0
@@ -35,12 +43,13 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 echo "Pushing ${BRANCH} to origin..."
 git push origin "$BRANCH"
 
-echo "Running training on ${REMOTE_HOST}..."
-ssh "$REMOTE_HOST" bash -s "$BRANCH" "$LANG_CODE" "$REMOTE_REPO_URL" <<'REMOTE_SCRIPT'
+echo "Running training on ${REMOTE_HOST} (ngram_order=${NGRAM_ORDER})..."
+ssh "$REMOTE_HOST" bash -s "$BRANCH" "$LANG_CODE" "$REMOTE_REPO_URL" "$NGRAM_ORDER" <<'REMOTE_SCRIPT'
 set -euo pipefail
 BRANCH="$1"
 LANG_CODE="$2"
 REPO_URL="$3"
+NGRAM_ORDER="$4"
 WORKDIR="$HOME/korean-transliteration-train"
 
 if [ ! -d "$WORKDIR" ]; then
@@ -73,8 +82,8 @@ docker run --rm --platform linux/amd64 -v "$WORKDIR/data:/work/data" phonetisaur
     "$BIN/phonetisaurus-align" --input="/work/data/corpus/'"${LANG_CODE}"'.dict" \
       --ofile=/work/data/train/model.corpus \
       --seq1_del=false --seq2_del=true --seq1_max=2 --seq2_max=3 --grow=false
-    "$BIN/estimate-ngram" -o 8 -t /work/data/train/model.corpus -wl /work/data/train/model.o8.arpa
-    "$BIN/phonetisaurus-arpa2wfst" --lm=/work/data/train/model.o8.arpa --ofile="/work/data/'"${LANG_CODE}"'.fst"
+    "$BIN/estimate-ngram" -o '"${NGRAM_ORDER}"' -t /work/data/train/model.corpus -wl /work/data/train/model.arpa
+    "$BIN/phonetisaurus-arpa2wfst" --lm=/work/data/train/model.arpa --ofile="/work/data/'"${LANG_CODE}"'.fst"
   '
 
 # The raw .fst can exceed GitHub's 100MB hard limit (an 8-gram joint model over a
