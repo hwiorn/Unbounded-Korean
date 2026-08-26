@@ -1448,6 +1448,16 @@ fn render_english_consonants(consonants: &[char]) -> String {
         .collect()
 }
 
+/// Extracts each token's kana reading from `word` (kanji or otherwise), using the same
+/// Lindera/ipadic-based lookup this crate's own "furigana" translit mode
+/// (crates/hangulize-rs/src/specs/jpn.hsl) already relies on -- exposed publicly so
+/// other crates can turn a kanji word into an alphabetic-adjacent (kana) proxy
+/// spelling, the same role transliterate_pinyin plays for Chinese, for a G2P
+/// alignment step that can't work on kanji directly.
+pub fn kana_reading_for_corpus(word: &str) -> Result<String> {
+    transliterate_furigana(word, true)
+}
+
 fn transliterate_furigana(word: &str, trim_terminal_long_vowels: bool) -> Result<String> {
     let word = repeat_kana(&word.nfc().collect::<String>());
     let mut out = String::new();
