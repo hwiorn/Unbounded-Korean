@@ -59,6 +59,11 @@ fn hangulizes_english_examples() {
     assert_eq!(hangulize("eng", "coffee").unwrap(), "커피");
     assert_eq!(hangulize("eng", "text").unwrap(), "텍스트");
     assert_eq!(hangulize("eng", "AI").unwrap(), "에이아이");
+    assert_eq!(hangulize("eng", "IBM").unwrap(), "아이비엠");
+    assert_eq!(hangulize("eng", "SKT").unwrap(), "에스케이티");
+    assert_eq!(hangulize("eng", "NAVER").unwrap(), "네이버");
+    assert_eq!(hangulize("eng", "KT").unwrap(), "케이티");
+    assert_eq!(hangulize("eng", "LG").unwrap(), "엘지");
     assert_eq!(hangulize("eng", "hello, world!").unwrap(), "헬로, 월드!");
 }
 

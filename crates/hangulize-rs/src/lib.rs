@@ -1037,12 +1037,89 @@ fn flush_english_segment(out: &mut String, segment: &mut String) -> Result<()> {
     Ok(())
 }
 
+// Brand names whose everyday Korean spelling doesn't match either a
+// letter-by-letter initialism reading or misaki's g2p guess (misaki has no
+// dictionary entry for them and its rule-based fallback cannot reliably
+// guess an out-of-vocabulary proper noun's pronunciation).
+const ENGLISH_WORD_OVERRIDES: &[(&str, &str)] = &[("NAVER", "네이버")];
+
+fn is_all_caps_initialism(word: &str) -> bool {
+    word.chars().count() >= 2 && word.chars().all(|c| c.is_ascii_uppercase())
+}
+
+fn spell_out_acronym(word: &str) -> String {
+    word.chars()
+        .filter_map(|c| match english_unit(c) {
+            Some(EnglishUnit::Letter(hangul)) => Some(hangul),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 fn english_segment_to_hangul(word: &str) -> Result<String> {
+    if let Some((_, hangul)) = ENGLISH_WORD_OVERRIDES
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(word))
+    {
+        return Ok((*hangul).to_string());
+    }
+    if is_all_caps_initialism(word) {
+        return Ok(spell_out_acronym(word));
+    }
+    english_word_to_hangul(word)
+}
+
+fn english_word_to_hangul(word: &str) -> Result<String> {
     let g2p = ENGLISH_G2P.lock().unwrap();
     let (phonemes, _) = g2p
         .g2p(word)
         .map_err(|err| Error::InvalidSpec(err.to_string()))?;
     Ok(english_phonemes_to_hangul(&phonemes))
+}
+
+/// Runs misaki's English G2P on `word` and returns a simplified, space-separated
+/// phoneme string (stress marks, length marks, and tie-bar joiners stripped; multi-
+/// character units like affricates and diphthongs kept as single tokens). Used to
+/// bulk-generate (word, phoneme) training pairs for `korean-transliteration`'s
+/// Phonetisaurus corpus — see docs/specs/2026-08-26-korean-transliteration-design.md.
+/// This is a corpus-building utility, not part of the hangulize() pipeline, so unlike
+/// `english_word_to_hangul` it never falls back to hangul-conversion behavior.
+pub fn english_ipa_for_corpus(word: &str) -> Result<String> {
+    let g2p = ENGLISH_G2P.lock().unwrap();
+    let (raw_phonemes, _) = g2p
+        .g2p(word)
+        .map_err(|err| Error::InvalidSpec(err.to_string()))?;
+    Ok(simplify_phoneme_string(&raw_phonemes))
+}
+
+fn simplify_phoneme_string(raw: &str) -> String {
+    const MULTI_CHAR_TOKENS: &[&str] = &[
+        "o\u{200d}ʊ", "oʊ", "e\u{200d}ɪ", "eɪ", "a\u{200d}ɪ", "aɪ", "a\u{200d}ʊ", "aʊ",
+        "ɔ\u{200d}ɪ", "ɔɪ", "tʃ", "dʒ",
+    ];
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while i < raw.len() {
+        let rest = &raw[i..];
+        if let Some(skip) = english_skip_len(rest) {
+            i += skip;
+            continue;
+        }
+        let ch = rest.chars().next().unwrap();
+        if ch.is_whitespace() {
+            i += ch.len_utf8();
+            continue;
+        }
+        if let Some(sym) = MULTI_CHAR_TOKENS.iter().find(|sym| rest.starts_with(**sym)) {
+            tokens.push(sym.replace('\u{200d}', ""));
+            i += sym.len();
+        } else {
+            tokens.push(ch.to_string());
+            i += ch.len_utf8();
+        }
+    }
+    tokens.join(" ")
 }
 
 fn english_phonemes_to_hangul(phonemes: &str) -> String {
@@ -1175,28 +1252,32 @@ fn english_units(word: &str) -> Vec<EnglishUnit> {
                 "oʊ".len()
             };
         } else if rest.starts_with("e‍ɪ") || rest.starts_with("eɪ") {
-            out.push(EnglishUnit::Letter("에이"));
+            out.push(EnglishUnit::Vowel('ㅔ'));
+            out.push(EnglishUnit::Vowel('ㅣ'));
             i += if rest.starts_with("e‍ɪ") {
                 "e‍ɪ".len()
             } else {
                 "eɪ".len()
             };
         } else if rest.starts_with("a‍ɪ") || rest.starts_with("aɪ") {
-            out.push(EnglishUnit::Letter("아이"));
+            out.push(EnglishUnit::Vowel('ㅏ'));
+            out.push(EnglishUnit::Vowel('ㅣ'));
             i += if rest.starts_with("a‍ɪ") {
                 "a‍ɪ".len()
             } else {
                 "aɪ".len()
             };
         } else if rest.starts_with("a‍ʊ") || rest.starts_with("aʊ") {
-            out.push(EnglishUnit::Letter("아우"));
+            out.push(EnglishUnit::Vowel('ㅏ'));
+            out.push(EnglishUnit::Vowel('ㅜ'));
             i += if rest.starts_with("a‍ʊ") {
                 "a‍ʊ".len()
             } else {
                 "aʊ".len()
             };
         } else if rest.starts_with("ɔ‍ɪ") || rest.starts_with("ɔɪ") {
-            out.push(EnglishUnit::Letter("오이"));
+            out.push(EnglishUnit::Vowel('ㅗ'));
+            out.push(EnglishUnit::Vowel('ㅣ'));
             i += if rest.starts_with("ɔ‍ɪ") {
                 "ɔ‍ɪ".len()
             } else {
