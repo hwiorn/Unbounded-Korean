@@ -1,22 +1,19 @@
 [package]
-name = "unbounded-korean-py"
+name = "korean-transliteration-py"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+
+[lib]
+name = "korean_transliteration"
+crate-type = ["cdylib", "rlib"]
+test = false
+doctest = false
 
 [features]
 default = []
 extension-module = ["pyo3/extension-module"]
 
-[lib]
-name = "unbounded_korean"
-crate-type = ["cdylib", "rlib"]
-test = false
-doctest = false
-
 [dependencies]
-g2pk.workspace = true
-korean_phonemizer.workspace = true
-hangulize-rs.workspace = true
 korean-transliteration.workspace = true
 pyo3.workspace = true

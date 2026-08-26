@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "korean-transliteration"
+version = "0.1.0"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+description = "Python bindings for korean-transliteration (Phonetisaurus G2P + table P2G)."
+
+[tool.maturin]
+module-name = "korean_transliteration"
+features = ["extension-module"]

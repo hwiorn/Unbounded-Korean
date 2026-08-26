@@ -158,6 +158,19 @@ fn list_langs() -> Vec<String> {
     hangulize_rs::list_langs()
 }
 
+#[pyfunction]
+#[allow(unsafe_op_in_unsafe_fn)]
+fn transliterate(lang: &str, word: &str) -> PyResult<String> {
+    korean_transliteration::transliterate(lang, word).map_err(to_transliteration_error)
+}
+
+fn to_transliteration_error(err: korean_transliteration::Error) -> PyErr {
+    match err {
+        korean_transliteration::Error::ModelNotFound(message) => PyValueError::new_err(message),
+        other => PyRuntimeError::new_err(other.to_string()),
+    }
+}
+
 fn parse_phonemizer_options(
     mode: &str,
     epitran_compat: bool,
@@ -195,5 +208,6 @@ fn unbounded_korean(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(phonemize_ko, m)?)?;
     m.add_function(wrap_pyfunction!(hangulize, m)?)?;
     m.add_function(wrap_pyfunction!(list_langs, m)?)?;
+    m.add_function(wrap_pyfunction!(transliterate, m)?)?;
     Ok(())
 }
