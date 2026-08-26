@@ -117,7 +117,14 @@ fn tokenize_ipa(ipa: &str) -> Vec<String> {
         let mut chars = rest.chars();
         let c = chars.next().expect("rest is non-empty");
         if is_recognized_phoneme_char(c) {
-            tokens.push(c.to_string());
+            // korean_phonemizer's medial_to_ipa follows traditional Korean IPA (ㅐ
+            // is "ɛ", ㅔ is "e"), but korean-transliteration's P2G table follows the
+            // English-IPA convention this corpus trains the model to decode
+            // (CMUdict/misaki: "ɛ" is the vowel in "bed" -> ㅔ, "æ" is the vowel in
+            // "cat" -> ㅐ). korean_phonemizer never emits "æ" itself, so remapping
+            // its "ɛ" here is unambiguous -- without it, every Hangul-derived ㅐ
+            // (e.g. "bank" 뱅크) trained the model to round-trip back as ㅔ instead.
+            tokens.push(if c == 'ɛ' { "æ".to_string() } else { c.to_string() });
         }
         rest = chars.as_str();
     }
@@ -266,6 +273,19 @@ mod tests {
         // there is no voiceless/voiced pair to correct here.
         let (filtered, _) = hangul_to_ipa("커피").unwrap();
         assert_eq!(filtered, "k ʌ p i");
+    }
+
+    #[test]
+    fn remaps_korean_phonemizers_ae_symbol_to_match_p2gs_english_ipa_convention() {
+        // korean_phonemizer's medial_to_ipa follows traditional Korean IPA, where ㅐ
+        // is "ɛ" and ㅔ is "e" -- but korean-transliteration's P2G table follows the
+        // English-IPA convention this corpus is trained to decode (CMUdict/misaki:
+        // "ɛ" is the vowel in "bed", mapping to ㅔ; "æ" is the vowel in "cat",
+        // mapping to ㅐ). Left unmapped, every Hangul-answer-derived ㅐ in the
+        // corpus (e.g. "bank" 뱅크) silently trained the model to round-trip it back
+        // as ㅔ instead.
+        let (filtered, _) = hangul_to_ipa("뱅크").unwrap();
+        assert_eq!(filtered, "b æ ŋ k ɯ");
     }
 
     #[test]
