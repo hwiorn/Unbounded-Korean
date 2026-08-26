@@ -977,6 +977,31 @@ git add crates/korean-transliteration-py Cargo.toml
 - [x] `legacy-pipeline-untouched` — `cargo test --test hangulize_cases` still 9/9
       green after all of this session's korean-transliteration work.
 
+## Follow-up: CMUdict data source (2026-08-26, same day)
+
+The user asked to close the ordinary-word accuracy gap (google/apple/coffee/day/boy/
+house) by training against CMUdict (https://github.com/cmusphinx/cmudict, BSD-style
+license, `data/corpus/CMUDICT_LICENSE`), which g2pK-style pipelines traditionally use
+for English-word phonemization (note: `crates/g2pk`'s own `english.rs` in *this* repo
+is only a 6-word stub, not actually CMUdict-based — that gap is what the user was
+recalling from the original Python g2pK project).
+
+- `scripts/convert_cmudict_to_ipa.py`: converts CMUdict's ARPABET pronunciations
+  (135,166 lines / 124,911 unique alphabetic words after filtering alternate
+  pronunciations, abbreviation entries, and inline comments) to the exact same
+  simplified-IPA alphabet `english_ipa_for_corpus` already established — no P2G
+  changes needed, just better training data.
+- `scripts/build_training_corpus.py` now merges multiple sources with priority
+  ordering (`build_corpus(paths, out)`, later path wins on overlap). CMUdict is the
+  high-priority source over the misaki-generated `eng_ipa.tsv`.
+- Rebuilt `data/corpus/eng.dict`: 328,336 entries (235,973 misaki-only ∪ CMUdict,
+  CMUdict winning all overlaps). Spot-checked all 8 previously-wrong words
+  (hello/world/google/apple/coffee/day/boy/house) — CMUdict gives clean, correct
+  phonemes for every one of them (e.g. "hello" → "hʌloʊ", a single /l/, unlike the
+  misaki-derived corpus's decoder-observed double-consonant artifact).
+- Retraining on `rares01.rapeech.intra` and re-verifying inference: see the updated
+  Results section below.
+
 ## Results (2026-08-26)
 
 Real end-to-end inference against the trained `data/eng.fst` model:
