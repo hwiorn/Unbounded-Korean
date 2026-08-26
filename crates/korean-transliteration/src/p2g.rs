@@ -41,6 +41,14 @@ fn unit_for(token: &str) -> Option<Unit> {
         "ɡ" | "g" => Unit::Consonant('ㄱ'),
         "k" => Unit::Consonant('ㅋ'),
         "t" => Unit::Consonant('ㅌ'),
+        // American English flaps an intervocalic /t/ to a voiced tap -- misaki's
+        // English IPA (eng_ipa.tsv) transcribes this surface realization as "ɾ"
+        // (distinct from a genuine /d/, which it still spells "d": "water" w ɔ ɾ
+        // ɚ vs "wedding" w ɛ d ɪ ŋ). Korean loanword convention follows the
+        // underlying spelling, not the flap, so this still renders as ㅌ (water
+        // 워터, city 시티, little 리틀) -- unmapped, it was silently dropped by
+        // `unit_for`'s catch-all `_ => None`, corrupting ~24,000 corpus entries.
+        "ɾ" => Unit::Consonant('ㅌ'),
         "d" => Unit::Consonant('ㄷ'),
         "p" => Unit::Consonant('ㅍ'),
         "b" => Unit::Consonant('ㅂ'),
@@ -507,6 +515,13 @@ mod tests {
             phonemes_to_hangul(&tokens(&["h", "o", "k", "ɯ", "l", "l", "i"])),
             "호클리"
         );
+    }
+
+    #[test]
+    fn maps_the_flap_to_tieut_not_silently_dropping_it() {
+        // "water" w ɔ ɾ ɚ -- an unmapped phoneme used to vanish entirely
+        // (워어 instead of 워터), not just render with the wrong jamo.
+        assert_eq!(phonemes_to_hangul(&tokens(&["w", "ɔ", "ɾ", "ɚ"])), "워터");
     }
 
     #[test]
