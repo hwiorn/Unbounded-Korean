@@ -1,0 +1,17 @@
+# korean-transliteration requirements
+
+default deterministic-output: valid source-language word submitted to transliterate() → same hangul string returned on every call for the same input
+default no-panic-on-oov: word not covered by the trained G2P model submitted → Result::Err returned, never a panic or process abort
+default no-embedded-file-dependency: crate is used at runtime → G2P model bytes are compiled into the binary (no external model file path required to exist on disk)
+default phoneme-gap-repaired: G2P phoneme output contains consecutive consonant phonemes or consecutive vowel phonemes with no separating phoneme → P2G exception handling inserts/merges so the resulting jamo sequence composes into valid Korean syllables (no dangling jamo, no malformed syllable block)
+
+entity KoreanTransliterationCrate regression-cases: "SKT", "NAVER", and every case in tests/hangulize_cases.rs's English assertions is submitted → output matches the human-reviewed expected hangul, with no letter-order corruption or stray spaces
+
+entity KoreanTransliterationPy python-parity: the Python binding is called with the same word as the Rust crate's transliterate() → both return an identical hangul string
+
+entity TrainPhonetisaurusScript remote-execution: scripts/train_phonetisaurus.sh is run → training executes inside a Docker container on a Linux x86_64 host reachable over SSH (not attempted natively on an arm64 host), and produces one .fst file per configured source language under data/
+
+rule no-restricted-license-content: no verbatim code or data strings copied from GPLv3-licensed KoG2P or unlicensed KoG2Padvanced appear anywhere in the repository
+default license-compliance: the repository is built, committed, or published → no-restricted-license-content holds
+
+default legacy-pipeline-untouched: hangulize-rs's existing "eng" language (english_phoneme translit path) is invoked directly → its behavior is unaffected by the existence of the new korean-transliteration crate

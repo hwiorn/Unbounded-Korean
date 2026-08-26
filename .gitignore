@@ -5,3 +5,5 @@
 /.omnia
 map_fst.dot
 map_fst.pdf
+__pycache__/
+.DS_Store
