@@ -1234,7 +1234,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flate2",
+ "hangulize-rs",
  "once_cell",
+ "pinyin",
  "sosap",
  "thiserror 2.0.18",
 ]
@@ -2933,6 +2935,7 @@ dependencies = [
  "hangulize-rs",
  "korean-transliteration",
  "korean_phonemizer",
+ "pinyin",
 ]
 
 [[package]]
