@@ -164,20 +164,33 @@ pub fn korean_to_ipa(spoken: &str, options: &PhonemizerOptions) -> String {
             coda = coda.replace('\u{031a}', "");
         }
 
-        // Palatalization: ㄷ/ㅌ before /i/ or yotized vowels becomes an
-        // alveolo-palatal affricate outside word-initial position.
-        if !at_word_start && is_palatal_vowel(vowel) {
-            if lead == 'ᄃ' {
-                onset = match options.ipa_style {
-                    IpaStyle::Combining => "t͡ɕ".to_string(),
-                    IpaStyle::Simplified => "tɕ".to_string(),
-                };
-            } else if lead == 'ᄐ' {
-                onset = match options.ipa_style {
-                    IpaStyle::Combining => "t͡ɕʰ".to_string(),
-                    IpaStyle::Simplified => "tɕʰ".to_string(),
-                };
+        // Palatalization (구개음화): a syllable-FINAL ㄷ/ㅌ migrates into a following
+        // null-onset 이/야/여/요/유 syllable as ㅈ/ㅊ -- 굳이[구지], 밭이[바치] (see
+        // resources/rules.txt's citation of this rule). This is a coda absorbed by
+        // the NEXT syllable, not a property of a syllable whose own onset happens to
+        // be ㄷ/ㅌ (that onset never had a coda to migrate, so "어디"/"마디"/"느티나무"
+        // must not palatalize).
+        let palatalizes_coda = lead == 'ᄋ' && is_palatal_vowel(vowel);
+        if palatalizes_coda && matches!(prev_coda, Some('ᆮ') | Some('ᇀ')) {
+            onset = match (prev_coda, options.ipa_style) {
+                (Some('ᆮ'), IpaStyle::Combining) => "d͡ɕ".to_string(),
+                (Some('ᆮ'), IpaStyle::Simplified) => "dɕ".to_string(),
+                (_, IpaStyle::Combining) => "t͡ɕʰ".to_string(),
+                (_, IpaStyle::Simplified) => "tɕʰ".to_string(),
+            };
+            // The previous syllable's coda string, once absorbed here, must be
+            // removed from what's already been pushed to `result` -- but that
+            // string went through the same epitran_compat stripping `coda` above
+            // does, so recompute it the same way rather than trusting
+            // final_to_ipa(prev_coda)'s raw (un-stripped) length.
+            let mut prev_coda_str = final_to_ipa(prev_coda).to_string();
+            if options.epitran_compat {
+                prev_coda_str = prev_coda_str.replace('\u{031a}', "");
             }
+            if let Some(last) = result.last_mut() {
+                last.truncate(last.len() - prev_coda_str.len());
+            }
+            prev_coda = None;
         }
 
         // Intervocalic/sonorant voicing: k/t/p and compatible affricates
@@ -469,5 +482,28 @@ mod tests {
     #[test]
     fn supports_epitran_mode() {
         assert_eq!(epitran_korean_to_ipa("한글").unwrap(), "hankɯl");
+    }
+
+    #[test]
+    fn palatalizes_a_coda_d_or_t_absorbed_by_a_following_i_syllable() {
+        // 구개음화 (palatalization): a syllable-FINAL ㄷ/ㅌ migrates into a following
+        // null-onset 이/야/여/요/유 syllable as ㅈ/ㅊ -- 굳이[구지], 밭이[바치] (see
+        // crates/g2pk/src/resources/rules.txt's own citation of this rule). This
+        // requires an actual coda to consume; it is NOT a property of a syllable
+        // whose own onset merely happens to be ㄷ/ㅌ.
+        let opts = PhonemizerOptions::default();
+        assert_eq!(korean_to_ipa("굳이", &opts), "kud͡ɕi");
+        assert_eq!(korean_to_ipa("밭이", &opts), "pat͡ɕʰi");
+    }
+
+    #[test]
+    fn does_not_palatalize_an_ordinary_d_or_t_onset_syllable() {
+        // "어디" (where), "마디" (a joint) and "느티나무" (zelkova) each have ㄷ/ㅌ as a
+        // syllable's OWN onset with no preceding coda to migrate -- there is nothing
+        // to palatalize, and none of these are pronounced with ㅈ/ㅊ.
+        let opts = PhonemizerOptions::default();
+        assert_eq!(korean_to_ipa("어디", &opts), "ʌdi");
+        assert_eq!(korean_to_ipa("마디", &opts), "madi");
+        assert_eq!(korean_to_ipa("느티나무", &opts), "nɯtʰinamu");
     }
 }
