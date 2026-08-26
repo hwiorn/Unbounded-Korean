@@ -61,6 +61,13 @@ _WORD_RE = re.compile(r"[a-z][a-z']*")
 
 
 def arpabet_to_ipa(token: str) -> str:
+    if token.rstrip("012") == "AH" and token.endswith("0"):
+        # Unstressed AH is the reduced schwa, not the full /ʌ/ vowel AH1/AH2 use --
+        # misaki's own English G2P already makes this distinction ("apple" -> "æ p ə
+        # l"), and P2G's collapse_syllabic_schwa_l rule (apple -> 애플, not 애펄) keys
+        # specifically on 'ə'. Collapsing both to 'ʌ' silently defeated that rule for
+        # every CMUdict word with an unstressed AH0 before a syllabic L.
+        return "ə"
     base = token.rstrip("012")
     if base in _VOWELS:
         return _VOWELS[base]

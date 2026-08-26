@@ -3,10 +3,20 @@ from convert_cmudict_to_ipa import arpabet_to_ipa, parse_cmudict_line, convert_c
 
 def test_arpabet_to_ipa_strips_stress_digits_and_maps_symbols():
     assert arpabet_to_ipa("HH") == "h"
-    assert arpabet_to_ipa("AH0") == "ʌ"
     assert arpabet_to_ipa("AH1") == "ʌ"
     assert arpabet_to_ipa("OW1") == "oʊ"
     assert arpabet_to_ipa("L") == "l"
+
+
+def test_arpabet_to_ipa_maps_unstressed_ah_to_schwa_not_wedge():
+    # AH0 (no stress) is the reduced schwa, not the full /ʌ/ vowel of AH1/AH2 --
+    # misaki's own English G2P already distinguishes them this way ("apple" ->
+    # "æ p ə l" in data/corpus/eng_ipa.tsv), and P2G's collapse_syllabic_schwa_l
+    # rule (apple -> 애플, not 애펄) keys specifically on 'ə', not 'ʌ'. Collapsing
+    # both stress levels to 'ʌ' silently defeated that rule for every CMUdict word
+    # with an unstressed AH0 before a syllabic L (apple, google, table, little...).
+    assert arpabet_to_ipa("AH0") == "ə"
+    assert arpabet_to_ipa("AH2") == "ʌ"
 
 
 def test_parse_cmudict_line_converts_hello():
@@ -17,7 +27,7 @@ def test_parse_cmudict_line_converts_hello():
     # (and later, korean-transliteration's own P2G bootstrap step's) default
     # whitespace lexicon-phoneme-separator tokenizes each symbol correctly instead of
     # treating the whole concatenated string as one atomic symbol.
-    assert parse_cmudict_line("hello HH AH0 L OW1") == ("hello", "h ʌ l oʊ")
+    assert parse_cmudict_line("hello HH AH0 L OW1") == ("hello", "h ə l oʊ")
 
 
 def test_parse_cmudict_line_skips_alternate_pronunciations():
@@ -45,6 +55,6 @@ def test_convert_cmudict_produces_sorted_deduped_output(tmp_path):
     out = tmp_path / "cmudict_ipa.tsv"
     convert_cmudict(src, out)
     assert out.read_text().splitlines() == [
-        "hello\th ʌ l oʊ",
+        "hello\th ə l oʊ",
         "world\tw ɝ l d",
     ]

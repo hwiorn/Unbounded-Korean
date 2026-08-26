@@ -20,6 +20,13 @@ enum Unit {
     /// compound vowel (와/워/워/워/워 etc.) rather than composing as a plain onset.
     Glide(char),
     Vowel(char),
+    /// A consonant that Korean's own phonemization marked as taking the neutral
+    /// vowel ㅡ as its own syllable nucleus (signaled by the training data's "ɯ"
+    /// token immediately following it — see `tokens_to_units`), rather than
+    /// attaching to whichever vowel comes next. Unlike a plain `Consonant`, this
+    /// renders immediately as its own syllable instead of queuing in `pending` for
+    /// the following vowel to claim as an onset.
+    NeutralSyllable(char),
 }
 
 fn unit_for(token: &str) -> Option<Unit> {
@@ -75,6 +82,19 @@ fn tokens_to_units<S: AsRef<str>>(phonemes: &[S]) -> Vec<Unit> {
     let mut units = Vec::with_capacity(phonemes.len());
     for token in phonemes {
         let token = token.as_ref();
+        // "ɯ" is not a phoneme in its own right -- it's the training-data signal
+        // (Korean's own neutral coda-filler vowel, preserved by
+        // examples/hangul_answer_to_ipa_corpus.rs's tokenizer) that the consonant
+        // immediately before it takes ㅡ as its own syllable, rather than attaching
+        // to whatever vowel comes next ("USA" 유에스에이 needs its middle S to stand
+        // alone this way; P2G's normal onset-maximization would otherwise attach it
+        // to the following 에이).
+        if token == "ɯ" {
+            if let Some(Unit::Consonant(c)) = units.last().copied() {
+                *units.last_mut().unwrap() = Unit::NeutralSyllable(c);
+            }
+            continue;
+        }
         let Some(unit) = unit_for(token) else {
             continue;
         };
@@ -214,6 +234,14 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                 pending.push(c);
                 i += 1;
             }
+            Unit::NeutralSyllable(c) => {
+                if !pending.is_empty() {
+                    out.push_str(&render_stray_consonants(&pending));
+                    pending.clear();
+                }
+                out.push(compose_syllable(c, 'ㅡ', None));
+                i += 1;
+            }
             Unit::Vowel(vowel) => {
                 let onset_char = pending.pop();
                 let onset = match onset_char {
@@ -324,6 +352,29 @@ mod tests {
         assert_eq!(
             phonemes_to_hangul(&tokens(&["m", "a", "i", "l", "l", "i", "dʒ", "i"])),
             "마일리지"
+        );
+    }
+
+    #[test]
+    fn stands_a_neutral_syllable_consonant_alone_between_two_vowels() {
+        // "USA" (유에스에이): korean_go_ipa.tsv's "ɯ" marker after the middle S means
+        // it takes its own syllable (스) instead of P2G's normal onset-maximization
+        // attaching it to the following 에이 (which would give 유에세이).
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["j", "u", "e", "s", "ɯ", "e", "i"])),
+            "유에스에이"
+        );
+    }
+
+    #[test]
+    fn a_neutral_syllable_consonant_still_lets_an_earlier_consonant_become_a_coda() {
+        // "text" (텍스트): raw phonemization is t-e-k-s-ɯ-t-ɯ. The K has no "ɯ" of
+        // its own, so it must still become 텍's coda, not a bare "크" syllable --
+        // confirms the neutral-syllable marker on S doesn't disturb the ordinary
+        // final-cluster-splitting path for the K before it.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["t", "e", "k", "s", "ɯ", "t", "ɯ"])),
+            "텍스트"
         );
     }
 }

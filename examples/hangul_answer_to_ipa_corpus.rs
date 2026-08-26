@@ -22,11 +22,13 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 
-// Matches korean_transliteration::p2g's recognized single-character phoneme set.
-// Everything else (Korean-phonology-specific artifacts: aspiration ʰ, tie-bars,
-// palatalization ɕ/ʑ, the neutral-vowel filler ɯ that Korean codas always carry but
-// English doesn't) is dropped — P2G doesn't need it, and it would only teach the
-// model to reproduce Korean-phonology noise instead of the English pattern.
+// Matches korean_transliteration::p2g's recognized single-character phoneme set, plus
+// 'ɯ' -- not a phoneme itself, but P2G's signal that the consonant right before it
+// takes ㅡ as its own syllable nucleus (see p2g.rs's Unit::NeutralSyllable) rather than
+// attaching to whatever vowel comes next (needed for e.g. "USA"'s middle S: 유에스에이,
+// not 유에세이). Everything else (aspiration ʰ, tie-bars, palatalization ɕ/ʑ handled
+// separately by tokenize_ipa) is dropped — P2G doesn't need it, and it would only
+// teach the model to reproduce Korean-phonology noise instead of the English pattern.
 fn is_recognized_phoneme_char(c: char) -> bool {
     matches!(
         c,
@@ -46,6 +48,7 @@ fn is_recognized_phoneme_char(c: char) -> bool {
             | 'u'
             | 'ʊ'
             | 'o'
+            | 'ɯ'
             | 'ɡ'
             | 'g'
             | 'k'
@@ -119,6 +122,25 @@ fn tokenize_ipa(ipa: &str) -> Vec<String> {
     tokens
 }
 
+/// Korean's plain ㅂ/ㄷ/ㄱ are phonetically realized as voiceless [p]/[t]/[k]
+/// word-initially (a real, correctly-modeled fact about Korean phonetics --
+/// korean_phonemizer's `is_voicing_context` only voices a lenis stop after a vowel or
+/// sonorant coda, which a word's first syllable never has). That's the right acoustic
+/// answer for Korean pronunciation, but it destroys the ㅂ-vs-ㅍ/ㄷ-vs-ㅌ/ㄱ-vs-ㅋ
+/// distinction this derivation needs to recover which English letter a word-initial
+/// Hangul syllable stands for ("BBC" -> 비비시 was training on "p i b i s i", losing B
+/// entirely). The Hangul spelling itself is unambiguous -- ㅂ always means B, never P
+/// -- so this corrects just the first token using the orthographic lead consonant.
+fn word_initial_lenis_voicing_correction(hangul: &str) -> Option<(&'static str, &'static str)> {
+    let (lead, _, _) = g2pk::hangul::decompose_char(hangul.chars().next()?)?;
+    match lead {
+        'ᄇ' => Some(("p", "b")),
+        'ᄃ' => Some(("t", "d")),
+        'ᄀ' => Some(("k", "ɡ")),
+        _ => None,
+    }
+}
+
 /// Returns (filtered-for-Phonetisaurus-training, raw-unfiltered-korean-phonemizer-ipa).
 /// The raw form is preserved as its own artifact (not discarded) even though only the
 /// filtered form feeds this crate's training corpus — the full Korean phonetic detail
@@ -127,7 +149,14 @@ fn tokenize_ipa(ipa: &str) -> Vec<String> {
 /// thrown away.
 fn hangul_to_ipa(hangul: &str) -> Option<(String, String)> {
     let phonemized = korean_phonemizer::phonemize_ko(hangul).ok()?;
-    let filtered = tokenize_ipa(&phonemized.ipa);
+    let mut filtered = tokenize_ipa(&phonemized.ipa);
+    if let Some((voiceless, voiced)) = word_initial_lenis_voicing_correction(hangul) {
+        if let Some(first) = filtered.first_mut() {
+            if first == voiceless {
+                *first = voiced.to_string();
+            }
+        }
+    }
     if filtered.is_empty() {
         None
     } else {
@@ -214,8 +243,26 @@ mod tests {
     }
 
     #[test]
-    fn drops_unrecognized_characters() {
-        // Aspiration/tense marks and the coda filler vowel ɯ carry no P2G target.
-        assert_eq!(tokenize_ipa("tʰɯs͈ɯ"), vec!["t", "s"]);
+    fn drops_unrecognized_characters_but_keeps_the_neutral_syllable_marker() {
+        // Aspiration/tense marks carry no P2G target and are dropped, but ɯ (the
+        // neutral-syllable marker P2G's Unit::NeutralSyllable consumes) is kept.
+        assert_eq!(tokenize_ipa("tʰɯs͈ɯ"), vec!["t", "ɯ", "s", "ɯ"]);
+    }
+
+    #[test]
+    fn corrects_word_initial_lenis_stop_voicing_for_bbc() {
+        // "비비시" phonemizes with a devoiced word-initial ㅂ ([p], correct Korean
+        // acoustics), which would otherwise train "BBC" on a lost B.
+        let (filtered, raw) = hangul_to_ipa("비비시").unwrap();
+        assert_eq!(filtered, "b i b i s i");
+        assert!(raw.starts_with('p'), "raw acoustic form must stay untouched: {raw:?}");
+    }
+
+    #[test]
+    fn does_not_correct_a_genuinely_aspirated_word_initial_consonant() {
+        // "커피" (coffee) starts with ㅋ (aspirated K), which already renders as "k" --
+        // there is no voiceless/voiced pair to correct here.
+        let (filtered, _) = hangul_to_ipa("커피").unwrap();
+        assert_eq!(filtered, "k ʌ p i");
     }
 }
