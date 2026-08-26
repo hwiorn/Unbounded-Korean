@@ -272,6 +272,16 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                     if after == ['ㄹ'] {
                         out.push(compose_syllable(onset, vowel, Some('ㄹ')));
                         pending.push('ㄹ');
+                    } else if matches!(after.first(), Some('ㄹ')) && after.len() > 1 {
+                        // ㄹ followed by another consonant, with a vowel further
+                        // ahead: ㄹ becomes THIS syllable's coda ("LG" 엘지, not
+                        // 에르지 -- leaving all of `after` for the next vowel's
+                        // onset-pop would strand ㄹ as its own 르 syllable instead).
+                        // The single-ㄹ case above already doubles it into the next
+                        // syllable's onset too when nothing else is queued; here the
+                        // next consonant(s) queue normally instead.
+                        out.push(compose_syllable(onset, vowel, Some('ㄹ')));
+                        pending = after[1..].to_vec();
                     } else {
                         out.push(compose_syllable(onset, vowel, None));
                         pending = after;
@@ -376,5 +386,24 @@ mod tests {
             phonemes_to_hangul(&tokens(&["t", "e", "k", "s", "ɯ", "t", "ɯ"])),
             "텍스트"
         );
+    }
+
+    #[test]
+    fn an_l_before_another_consonant_becomes_a_coda_not_a_stray_syllable() {
+        // "LG" (엘지): a coda-eligible ㄹ immediately followed by another consonant,
+        // with a vowel further ahead, must become THIS syllable's coda (엘) -- the
+        // general onset-cluster fallback (pop the last pending consonant as the next
+        // onset, strand earlier ones as their own ㅡ-vowel syllables) would otherwise
+        // strand ㄹ as a spurious "르" syllable, giving 에르지 instead.
+        assert_eq!(phonemes_to_hangul(&tokens(&["e", "l", "dʒ", "i"])), "엘지");
+    }
+
+    #[test]
+    fn world_is_unaffected_by_the_l_coda_fix() {
+        // Regression guard: "world" (월드) already relies on split_final_cluster's
+        // word-final path (ㄹ followed by ㄷ with no vowel after at all), a different
+        // branch entirely from the one the LG fix touches -- confirms the two don't
+        // collide.
+        assert_eq!(phonemes_to_hangul(&tokens(&["w", "ɝ", "l", "d"])), "월드");
     }
 }
