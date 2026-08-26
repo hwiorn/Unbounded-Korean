@@ -454,6 +454,22 @@ git pull origin "$BRANCH"
 echo "Trained model available at data/${LANG_CODE}.fst"
 ```
 
+**Correction found during Task 6 execution (2026-08-26):** the CLI name/flags above were
+guessed and turned out wrong on two counts. (1) `docker/build_phonetisaurus.sh`'s
+from-source build failed at the MITLM `./configure` step because it probes for a
+Fortran 77 compiler (not installed in the image) and aborts — never even reaching the
+OpenFst-1.8-incompatibility risk this plan anticipated. (2) The pip-wheel fallback
+activated correctly, but it doesn't provide a `phonetisaurus-train` binary at all — the
+rhasspy package installs a single `phonetisaurus` console script with `train`/`predict`
+subcommands (`phonetisaurus train --model MODEL lexicon...`, `phonetisaurus predict
+--model MODEL words...`), plus a Python API (`phonetisaurus.train()`/`.predict()`) and
+its own bundled precompiled OpenFst binaries — it does not shell out to a system
+Phonetisaurus install at all. `scripts/train_phonetisaurus.sh` and `crates/korean-transliteration`'s later inference
+calls use this real CLI, not the guessed one. The from-source path was left as-is (not worth
+fixing the Fortran dependency) since the pip-wheel path already gives a fully working,
+modern OpenFst-based toolchain.
+```
+
 - [ ] **Step 4: Run the dry-run — must succeed**
 Run: `bash scripts/train_phonetisaurus.sh eng --dry-run`
 Expected: prints the `[dry-run]` line and exits 0

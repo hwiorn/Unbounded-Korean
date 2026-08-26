@@ -52,11 +52,8 @@ git checkout "$BRANCH"
 git pull origin "$BRANCH"
 
 docker build --platform linux/amd64 -f docker/phonetisaurus-train.Dockerfile -t phonetisaurus-train .
-mkdir -p "data/${LANG_CODE}_train"
 docker run --rm --platform linux/amd64 -v "$WORKDIR/data:/work/data" phonetisaurus-train \
-  phonetisaurus-train --lexicon "/work/data/corpus/${LANG_CODE}.dict" \
-  --dir_prefix "/work/data/${LANG_CODE}_train"
-cp "data/${LANG_CODE}_train/model.fst" "data/${LANG_CODE}.fst"
+  phonetisaurus train --model "/work/data/${LANG_CODE}.fst" "/work/data/corpus/${LANG_CODE}.dict"
 
 git add "data/${LANG_CODE}.fst"
 git commit -m "data: train ${LANG_CODE}.fst on $(hostname)"
