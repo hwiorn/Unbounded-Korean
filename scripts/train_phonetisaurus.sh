@@ -55,17 +55,24 @@ docker build --platform linux/amd64 -f docker/phonetisaurus-train.Dockerfile -t 
 docker run --rm --platform linux/amd64 -v "$WORKDIR/data:/work/data" phonetisaurus-train \
   phonetisaurus train --model "/work/data/${LANG_CODE}.fst" "/work/data/corpus/${LANG_CODE}.dict"
 
-git add "data/${LANG_CODE}.fst"
-git commit -m "data: train ${LANG_CODE}.fst on $(hostname)"
+# The raw .fst can exceed GitHub's 100MB hard limit (an 8-gram joint model over a
+# 300k+-entry corpus is well over that). It compresses to ~30% of its size (a lot of
+# structural redundancy in the FST binary format), so ship it as .fst.gz and
+# decompress at load time in the Rust crate instead of the raw file.
+gzip -kf "data/${LANG_CODE}.fst"
+rm -f "data/${LANG_CODE}.fst"
+
+git add "data/${LANG_CODE}.fst.gz"
+git commit -m "data: train ${LANG_CODE}.fst.gz on $(hostname)"
 git push origin "$BRANCH"
 REMOTE_SCRIPT
 
 echo "Pulling trained model back..."
 git pull origin "$BRANCH"
 
-if [ -f "data/${LANG_CODE}.fst" ]; then
-  echo "Trained model available at data/${LANG_CODE}.fst"
+if [ -f "data/${LANG_CODE}.fst.gz" ]; then
+  echo "Trained model available at data/${LANG_CODE}.fst.gz"
 else
-  echo "error: expected data/${LANG_CODE}.fst after pull, but it is missing" >&2
+  echo "error: expected data/${LANG_CODE}.fst.gz after pull, but it is missing" >&2
   exit 1
 fi
