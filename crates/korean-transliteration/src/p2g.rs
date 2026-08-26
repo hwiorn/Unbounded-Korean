@@ -311,4 +311,19 @@ mod tests {
         // v-containing words like the NAVER brand-name training entry).
         assert_eq!(phonemes_to_hangul(&tokens(&["n", "eɪ", "v", "ɝ"])), "네이버");
     }
+
+    #[test]
+    fn reconstructs_explicit_double_l_from_korean_answer_derived_training_data() {
+        // korean_go_ipa.tsv derives phonemes from the real Hangul answer, so an
+        // intervocalic /l/ written across two syllables (마일리지) comes through as
+        // two adjacent 'l' tokens, not the single phoneme collapse_geminate_consonants
+        // expects from a genuine English word. Confirms the existing pipeline already
+        // handles this: collapse reduces it to one 'l', and the onset/vowel loop's own
+        // ㄹㄹ-doubling (for an intervocalic L, per 외래어 표기법 6항 rule 2) regenerates
+        // the second syllable from that single L, landing on the same answer either way.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["m", "a", "i", "l", "l", "i", "dʒ", "i"])),
+            "마일리지"
+        );
+    }
 }
