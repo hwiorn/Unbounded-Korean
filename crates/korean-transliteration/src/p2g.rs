@@ -109,16 +109,25 @@ fn tokens_to_units<S: AsRef<str>>(phonemes: &[S]) -> Vec<Unit> {
 
 /// A decoder can emit the same consonant phoneme twice in a row where English
 /// orthography has a doubled letter but only one actual sound (observed with an
-/// earlier, less accurate decoder: "hello" as "hɛlloʊ" — a real /l/-/l/ duplication
-/// artifact, not a genuine geminate consonant cluster, since English doesn't
-/// phonemically distinguish gemination). Collapsing adjacent identical consonants
-/// avoids a spurious extra syllable like "헤르로" instead of "헬로".
+/// earlier, less accurate decoder, for non-liquid consonants). Collapsing adjacent
+/// identical consonants avoids a spurious extra syllable from that artifact.
+///
+/// ㄹ is exempt: unlike other consonants, a genuinely doubled ㄹ from
+/// Korean-answer-derived training data is phonologically meaningful, not a decoder
+/// artifact -- Korean loanword orthography productively doubles an intervocalic
+/// liquid that came from the source word's own coda+onset pair ("mileage" 마일리지
+/// has a real 일-coda ㄹ next to 리's onset ㄹ). Collapsing that away and then
+/// re-inflating it at render time (the old approach) couldn't tell a genuinely
+/// doubled ㄹ apart from a genuinely single one, so it doubled every intervocalic
+/// ㄹ unconditionally -- wrong for a single source /l/ or /r/ ("neuron" 뉴런, not
+/// 뉼런). Leaving real ㄹ doubles intact here lets the ordinary coda-carry logic in
+/// `phonemes_to_hangul` render exactly as many ㄹ syllables as the data has.
 fn collapse_geminate_consonants(units: Vec<Unit>) -> Vec<Unit> {
     let mut out: Vec<Unit> = Vec::with_capacity(units.len());
     for unit in units {
         let is_repeat = matches!(
             (out.last(), unit),
-            (Some(Unit::Consonant(a)), Unit::Consonant(b)) if *a == b
+            (Some(Unit::Consonant(a)), Unit::Consonant(b)) if *a == b && *a != 'ㄹ'
         );
         if !is_repeat {
             out.push(unit);
@@ -250,7 +259,21 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                     Some(c) => OnsetCandidate::Consonant(c),
                     None => OnsetCandidate::None,
                 };
-                let (onset, vowel) = resolve_onset_vowel(onset, vowel);
+                let (mut onset, vowel) = resolve_onset_vowel(onset, vowel);
+                // A plain consonant directly before a glide ("n" before "j" in
+                // "new") is the syllable's real onset -- resolve_onset_vowel's
+                // glide arms always place the placeholder ㅇ onset there, which is
+                // only correct when nothing precedes the glide ("USA"'s 유).
+                // Reclaim it from `pending` instead of letting it strand as its
+                // own stray ㅡ-vowel syllable ("neuron" 뉴런, not 느율런).
+                if matches!(onset_char, Some('W') | Some('Y')) {
+                    if let Some(&last) = pending.last() {
+                        if last != 'W' && last != 'Y' {
+                            onset = last;
+                            pending.pop();
+                        }
+                    }
+                }
                 if !pending.is_empty() {
                     out.push_str(&render_stray_consonants(&pending));
                     pending.clear();
@@ -269,17 +292,20 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                 let next_is_vowel = j < units.len() && matches!(units[j], Unit::Vowel(_));
 
                 if next_is_vowel {
-                    if after == ['ㄹ'] {
-                        out.push(compose_syllable(onset, vowel, Some('ㄹ')));
-                        pending.push('ㄹ');
-                    } else if matches!(after.first(), Some('ㄹ')) && after.len() > 1 {
+                    if matches!(after.first(), Some('ㄹ')) && after.len() > 1 {
                         // ㄹ followed by another consonant, with a vowel further
                         // ahead: ㄹ becomes THIS syllable's coda ("LG" 엘지, not
                         // 에르지 -- leaving all of `after` for the next vowel's
-                        // onset-pop would strand ㄹ as its own 르 syllable instead).
-                        // The single-ㄹ case above already doubles it into the next
-                        // syllable's onset too when nothing else is queued; here the
-                        // next consonant(s) queue normally instead.
+                        // onset-pop would strand ㄹ as its own 르 syllable
+                        // instead). This also covers a genuinely doubled ㄹ from
+                        // the training data (after == ['ㄹ', 'ㄹ'], "mileage"
+                        // 마일리지): the first becomes this syllable's coda, the
+                        // second queues as the next syllable's onset. A single ㄹ
+                        // (after.len() == 1) is deliberately NOT special-cased
+                        // here -- it falls to the plain branch below and becomes
+                        // only the next syllable's onset, since a source /l/ or
+                        // /r/ that was never doubled must not be forced into one
+                        // ("neuron" 뉴런, not 뉼런; see collapse_geminate_consonants).
                         out.push(compose_syllable(onset, vowel, Some('ㄹ')));
                         pending = after[1..].to_vec();
                     } else {
@@ -316,7 +342,7 @@ mod tests {
 
     #[test]
     fn composes_simple_cvc_word() {
-        assert_eq!(phonemes_to_hangul(&tokens(&["h", "ɛ", "l", "oʊ"])), "헬로");
+        assert_eq!(phonemes_to_hangul(&tokens(&["b", "ʊ", "k"])), "북");
     }
 
     #[test]
@@ -331,6 +357,11 @@ mod tests {
 
     #[test]
     fn collapses_doubled_consonant_decoder_artifact() {
+        // "hello" 헬로: this is a genuine doubled ㄹ (헬's coda + 로's onset), the
+        // same case reconstructs_explicit_double_l_... below covers, not actually
+        // a decoder artifact in this pipeline's Hangul-answer-derived training
+        // data -- kept as a regression guard for the ㄹ-exclusion in
+        // collapse_geminate_consonants.
         assert_eq!(
             phonemes_to_hangul(&tokens(&["h", "ɛ", "l", "l", "oʊ"])),
             "헬로"
@@ -405,5 +436,54 @@ mod tests {
         // branch entirely from the one the LG fix touches -- confirms the two don't
         // collide.
         assert_eq!(phonemes_to_hangul(&tokens(&["w", "ɝ", "l", "d"])), "월드");
+    }
+
+    #[test]
+    fn a_consonant_immediately_before_a_glide_becomes_the_syllables_true_onset() {
+        // "new" (뉴): pending holds [ㄴ, Y] when the vowel 'u' arrives.
+        // pending.pop() only recovers the glide, so the plain consonant before it
+        // was being stranded as its own stray syllable (느율 instead of 뉴).
+        assert_eq!(phonemes_to_hangul(&tokens(&["n", "j", "u"])), "뉴");
+        // "queen" (퀸): same bug with the 'w' glide (크윈 instead of 퀸).
+        assert_eq!(phonemes_to_hangul(&tokens(&["k", "w", "i", "n"])), "퀸");
+    }
+
+    #[test]
+    fn newton_and_newport_get_the_reclaimed_onset_correctly() {
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["n", "j", "u", "t", "ʌ", "n"])),
+            "뉴턴"
+        );
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["n", "j", "u", "p", "o", "t", "ɯ"])),
+            "뉴포트"
+        );
+    }
+
+    #[test]
+    fn a_single_intervocalic_liquid_is_not_forced_into_a_double_coda() {
+        // "neuron" (뉴런): the trained phonemes have exactly one 'l' token (Korean
+        // 뉴런 has no ㄹ coda, only 런's onset), but the old "after == ['ㄹ']" branch
+        // unconditionally doubled ANY single intervocalic liquid into a coda +
+        // matching next onset, which is only correct for a liquid that really was
+        // doubled in the source (an English intervocalic /l/, e.g. "mileage"
+        // 마일리지 below) -- not for a single /l/ or /r/ ("neuron" 뉼런 was wrong).
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["n", "j", "u", "l", "ʌ", "n"])),
+            "뉴런"
+        );
+    }
+
+    #[test]
+    fn a_genuinely_doubled_liquid_from_the_korean_answer_still_doubles() {
+        // Regression guard for reconstructs_explicit_double_l_from_korean_answer_
+        // derived_training_data's underlying mechanism, using un-collapsed input
+        // directly: two REAL adjacent 'l' tokens (Korean 일 coda + 리 onset) must
+        // still produce two syllables, now via the general "ㄹ followed by another
+        // consonant" coda-carry path rather than the deleted forced-redouble branch.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["m", "a", "i", "l", "l", "i", "dʒ", "i"])),
+            "마일리지"
+        );
     }
 }
