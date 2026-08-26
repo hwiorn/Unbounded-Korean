@@ -248,8 +248,24 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                     out.push_str(&render_stray_consonants(&pending));
                     pending.clear();
                 }
-                out.push(compose_syllable(c, 'ㅡ', None));
-                i += 1;
+                // A neutral syllable renders immediately with no coda slot of its
+                // own, but a genuinely doubled ㄹ right after it (coda + onset
+                // from the Hangul answer, e.g. "Claiborne" 클레이번's 클-coda +
+                // 레-onset) still needs somewhere for the first ㄹ to land. Give
+                // it to THIS syllable as a coda instead of leaving it for the
+                // ordinary onset-pop mechanism, which would strand it as its own
+                // stray "르" syllable once the second ㄹ claims the next vowel's
+                // onset (크르레 instead of 클레).
+                if matches!(units.get(i + 1), Some(Unit::Consonant('ㄹ')))
+                    && matches!(units.get(i + 2), Some(Unit::Consonant('ㄹ')))
+                    && matches!(units.get(i + 3), Some(Unit::Vowel(_)))
+                {
+                    out.push(compose_syllable(c, 'ㅡ', Some('ㄹ')));
+                    i += 2;
+                } else {
+                    out.push(compose_syllable(c, 'ㅡ', None));
+                    i += 1;
+                }
             }
             Unit::Vowel(vowel) => {
                 let onset_char = pending.pop();
@@ -471,6 +487,25 @@ mod tests {
         assert_eq!(
             phonemes_to_hangul(&tokens(&["n", "j", "u", "l", "ʌ", "n"])),
             "뉴런"
+        );
+    }
+
+    #[test]
+    fn a_neutral_syllable_still_gets_a_coda_from_a_genuinely_doubled_liquid_after_it() {
+        // "Claiborne" 클레이번: korean_go_ipa.tsv gives "k ɯ l l e i b ʌ n" -- the
+        // neutral-syllable K (클's own ㅡ nucleus) is immediately followed by a
+        // real doubled ㄹ (클's coda + 레's onset). NeutralSyllable used to render
+        // immediately with no coda slot, stranding the first ㄹ as its own stray
+        // "르" syllable once the second ㄹ claimed the next vowel's onset (크르레
+        // instead of 클레).
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["k", "ɯ", "l", "l", "e", "i", "b", "ʌ", "n"])),
+            "클레이번"
+        );
+        // "Hockley" 호클리: "h o k ɯ l l i" -- same pattern, mid-word.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["h", "o", "k", "ɯ", "l", "l", "i"])),
+            "호클리"
         );
     }
 
