@@ -2,16 +2,20 @@
 sorted, deduplicated) from one or more (English word, IPA) source files.
 
 Sources are merged in priority order: later paths override earlier ones for the same
-word. `data/corpus/eng_ipa.tsv` (misaki-generated, full /usr/share/dict/words
-coverage) is the low-priority base; `data/corpus/cmudict_ipa.tsv` (CMUdict, BSD
-license, professionally curated) is the high-priority override for the ~125k words it
-covers — CMUdict doesn't have this session's Phonetisaurus-decoder-observed quality
-issues (e.g. a misaki/OOV-decode artifact double-counting a consonant), so it wins
-where both sources have an entry.
+word. From lowest to highest priority:
 
-`hsl_seed.tsv` and `korean_go.tsv` (word -> Hangul, not phonemes) are excluded here and
-used as the evaluation set instead — see docs/plans/2026-08-26-
-korean-transliteration-plan.md, Task 4.
+  1. `eng_ipa.tsv` — misaki-generated, full /usr/share/dict/words coverage, but a
+     guess (no human ever verified these pronunciations).
+  2. `hsl_eng_ipa.tsv` — hangulize-rs's eng.hsl test cases, run through this
+     project's own Korean G2P (see examples/hangul_answer_to_ipa_corpus.rs): a real,
+     human-verified (word, Hangul) pair converted back into phonemes, not guessed.
+  3. `korean_go_ipa.tsv` — muik/transliteration's korean-go.txt (국립국어원-sourced),
+     same Hangul->phonemes derivation as above; large and officially sourced.
+  4. `muik_other_ipa.tsv` — muik/transliteration's remaining data/source files
+     (cities, dictionary, doosan, self, suggests, wiktionary), same derivation.
+  5. `cmudict_ipa.tsv` — CMUdict (BSD-style license, professionally curated ARPABET
+     dictionary): no Hangul-derivation step at all, so no g2pk-introduced noise.
+     Wins over everything else where multiple sources cover the same word.
 """
 
 import sys

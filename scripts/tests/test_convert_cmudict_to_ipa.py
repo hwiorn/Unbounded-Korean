@@ -12,8 +12,12 @@ def test_arpabet_to_ipa_strips_stress_digits_and_maps_symbols():
 def test_parse_cmudict_line_converts_hello():
     # cmudict spells "hello" with two L's pronounced as one /l/ (single L phoneme,
     # unlike the Phonetisaurus decoder artifact this session found for misaki-derived
-    # training data).
-    assert parse_cmudict_line("hello HH AH0 L OW1") == ("hello", "hʌloʊ")
+    # training data). Phonemes are space-separated, matching
+    # hangulize-rs's english_ipa_for_corpus convention — required so Phonetisaurus's
+    # (and later, korean-transliteration's own P2G bootstrap step's) default
+    # whitespace lexicon-phoneme-separator tokenizes each symbol correctly instead of
+    # treating the whole concatenated string as one atomic symbol.
+    assert parse_cmudict_line("hello HH AH0 L OW1") == ("hello", "h ʌ l oʊ")
 
 
 def test_parse_cmudict_line_skips_alternate_pronunciations():
@@ -31,7 +35,7 @@ def test_parse_cmudict_line_strips_trailing_comment():
     # Some cmudict.dict entries carry an inline gloss comment, e.g. place/name origin.
     assert parse_cmudict_line("aalborg AO1 L B AO0 R G # place, danish") == (
         "aalborg",
-        "ɔlbɔɹɡ",
+        "ɔ l b ɔ ɹ ɡ",
     )
 
 
@@ -41,6 +45,6 @@ def test_convert_cmudict_produces_sorted_deduped_output(tmp_path):
     out = tmp_path / "cmudict_ipa.tsv"
     convert_cmudict(src, out)
     assert out.read_text().splitlines() == [
-        "hello\thʌloʊ",
-        "world\twɝld",
+        "hello\th ʌ l oʊ",
+        "world\tw ɝ l d",
     ]

@@ -78,7 +78,7 @@ def parse_cmudict_line(line: str) -> tuple[str, str] | None:
     if not _WORD_RE.fullmatch(word):
         return None  # "a(2)" (alt. pronunciation), "a." (abbreviation), "'bout" (elided
         # informal contraction) — mid-word apostrophes ("it's") are still allowed
-    return word, "".join(arpabet_to_ipa(p) for p in phonemes)
+    return word, " ".join(arpabet_to_ipa(p) for p in phonemes)
 
 
 def convert_cmudict(src_path: Path, out_path: Path) -> None:
