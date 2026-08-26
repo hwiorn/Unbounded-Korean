@@ -43,6 +43,37 @@ lang_model!(DEU_MODEL, "../../../data/deu.fst.gz");
 lang_model!(SPA_MODEL, "../../../data/spa.fst.gz");
 lang_model!(CHI_MODEL, "../../../data/chi.fst.gz");
 lang_model!(JPN_MODEL, "../../../data/jpn.fst.gz");
+lang_model!(AZE_MODEL, "../../../data/aze.fst.gz");
+lang_model!(BEL_MODEL, "../../../data/bel.fst.gz");
+lang_model!(BUL_MODEL, "../../../data/bul.fst.gz");
+lang_model!(CAT_MODEL, "../../../data/cat.fst.gz");
+lang_model!(CES_MODEL, "../../../data/ces.fst.gz");
+lang_model!(CYM_MODEL, "../../../data/cym.fst.gz");
+lang_model!(ELL_MODEL, "../../../data/ell.fst.gz");
+lang_model!(EPO_MODEL, "../../../data/epo.fst.gz");
+lang_model!(EST_MODEL, "../../../data/est.fst.gz");
+lang_model!(FIN_MODEL, "../../../data/fin.fst.gz");
+lang_model!(GRC_MODEL, "../../../data/grc.fst.gz");
+lang_model!(HBS_MODEL, "../../../data/hbs.fst.gz");
+lang_model!(HUN_MODEL, "../../../data/hun.fst.gz");
+lang_model!(ISL_MODEL, "../../../data/isl.fst.gz");
+lang_model!(KAT_MODEL, "../../../data/kat.fst.gz");
+lang_model!(LAT_MODEL, "../../../data/lat.fst.gz");
+lang_model!(LAV_MODEL, "../../../data/lav.fst.gz");
+lang_model!(LIT_MODEL, "../../../data/lit.fst.gz");
+lang_model!(MKD_MODEL, "../../../data/mkd.fst.gz");
+lang_model!(POL_MODEL, "../../../data/pol.fst.gz");
+lang_model!(POR_MODEL, "../../../data/por.fst.gz");
+lang_model!(RON_MODEL, "../../../data/ron.fst.gz");
+lang_model!(RUS_MODEL, "../../../data/rus.fst.gz");
+lang_model!(SLK_MODEL, "../../../data/slk.fst.gz");
+lang_model!(SLV_MODEL, "../../../data/slv.fst.gz");
+lang_model!(SQI_MODEL, "../../../data/sqi.fst.gz");
+lang_model!(SWE_MODEL, "../../../data/swe.fst.gz");
+lang_model!(TUR_MODEL, "../../../data/tur.fst.gz");
+lang_model!(UKR_MODEL, "../../../data/ukr.fst.gz");
+lang_model!(VIE_MODEL, "../../../data/vie.fst.gz");
+lang_model!(WLM_MODEL, "../../../data/wlm.fst.gz");
 
 fn model_for(lang: &str) -> Option<&'static Model> {
     match lang {
@@ -53,6 +84,37 @@ fn model_for(lang: &str) -> Option<&'static Model> {
         "spa" | "es" => Some(&SPA_MODEL),
         "chi" | "zh" => Some(&CHI_MODEL),
         "jpn" | "ja" => Some(&JPN_MODEL),
+        "aze" | "az" => Some(&AZE_MODEL),
+        "bel" | "be" => Some(&BEL_MODEL),
+        "bul" | "bg" => Some(&BUL_MODEL),
+        "cat" | "ca" => Some(&CAT_MODEL),
+        "ces" | "cs" => Some(&CES_MODEL),
+        "cym" | "cy" => Some(&CYM_MODEL),
+        "ell" | "el" => Some(&ELL_MODEL),
+        "epo" | "eo" => Some(&EPO_MODEL),
+        "est" | "et" => Some(&EST_MODEL),
+        "fin" | "fi" => Some(&FIN_MODEL),
+        "grc" => Some(&GRC_MODEL),
+        "hbs" => Some(&HBS_MODEL),
+        "hun" | "hu" => Some(&HUN_MODEL),
+        "isl" | "is" => Some(&ISL_MODEL),
+        "kat" | "ka" => Some(&KAT_MODEL),
+        "lat" | "la" => Some(&LAT_MODEL),
+        "lav" | "lv" => Some(&LAV_MODEL),
+        "lit" | "lt" => Some(&LIT_MODEL),
+        "mkd" | "mk" => Some(&MKD_MODEL),
+        "pol" | "pl" => Some(&POL_MODEL),
+        "por" | "pt" => Some(&POR_MODEL),
+        "ron" | "ro" => Some(&RON_MODEL),
+        "rus" | "ru" => Some(&RUS_MODEL),
+        "slk" | "sk" => Some(&SLK_MODEL),
+        "slv" | "sl" => Some(&SLV_MODEL),
+        "sqi" | "sq" => Some(&SQI_MODEL),
+        "swe" | "sv" => Some(&SWE_MODEL),
+        "tur" | "tr" => Some(&TUR_MODEL),
+        "ukr" | "uk" => Some(&UKR_MODEL),
+        "vie" | "vi" => Some(&VIE_MODEL),
+        "wlm" => Some(&WLM_MODEL),
         _ => None,
     }
 }
