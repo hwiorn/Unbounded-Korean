@@ -5,7 +5,7 @@ pub mod reverse;
 use once_cell::sync::Lazy;
 use pinyin::ToPinyin;
 use sosap::Model;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::Read;
 
 #[derive(Debug, thiserror::Error)]
@@ -160,26 +160,36 @@ fn dictionary_for(lang: &str) -> Option<&'static HashMap<&'static str, &'static 
 /// Words with a real, human-verified (English word, Hangul answer) pair behind
 /// them (hsl_eng_ipa.tsv, muik_other_ipa.tsv, korean_go_ipa.tsv -- see
 /// scripts/build_training_corpus.py's docstring for eng.dict's own source
-/// priority). "eng"'s remaining ~90% of vocabulary only ever had misaki's
-/// guessed pronunciation to train on, where cmudict's professionally curated
-/// American pronunciation (the separate "eng-us" model) is more reliable --
-/// but merging cmudict into eng.dict itself, at any priority, measurably hurt
-/// accuracy even for words the merge never touches (its statistics still
-/// shift the model's joint n-gram smoothing). So the "no authoritative
-/// answer, prefer eng-us" substitution happens here, per word, instead of in
-/// the training corpus.
-static ENG_HAS_AUTHORITATIVE_ANSWER: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    [
-        include_str!("../../../data/corpus/hsl_eng_ipa.tsv"),
-        include_str!("../../../data/corpus/muik_other_ipa.tsv"),
-        include_str!("../../../data/corpus/korean_go_ipa.tsv"),
-    ]
-    .iter()
-    .flat_map(|tsv| tsv.lines())
-    .filter_map(|line| line.split_once('\t'))
-    .map(|(word, _)| word)
-    .collect()
-});
+/// priority, which this mirrors: later sources in the array win). Keyed
+/// straight to the exact phonemes eng.dict itself trains on for that word,
+/// not just whether one exists, so `transliterate` can render them directly
+/// instead of re-running them through the live FST decoder -- every word this
+/// map contains is authoritative by construction, so decoding it is pure risk
+/// with no possible upside: the trained ENG_MODEL FST doesn't always
+/// reproduce its own training data exactly (e.g. "coffee"/"Rolland" used to
+/// decode to a statistically more common neighboring pattern instead of the
+/// specific answer they were trained on), while this lookup is guaranteed
+/// correct by definition. "eng"'s remaining ~90% of vocabulary only ever had
+/// misaki's guessed pronunciation to train on, where cmudict's professionally
+/// curated American pronunciation (the separate "eng-us" model) is more
+/// reliable -- but merging cmudict into eng.dict itself, at any priority,
+/// measurably hurt accuracy even for words the merge never touches (its
+/// statistics still shift the model's joint n-gram smoothing). So the "no
+/// authoritative answer, prefer eng-us" substitution happens here, per word,
+/// instead of in the training corpus.
+static ENG_AUTHORITATIVE_PHONEMES: Lazy<HashMap<&'static str, Vec<&'static str>>> =
+    Lazy::new(|| {
+        [
+            include_str!("../../../data/corpus/hsl_eng_ipa.tsv"),
+            include_str!("../../../data/corpus/muik_other_ipa.tsv"),
+            include_str!("../../../data/corpus/korean_go_ipa.tsv"),
+        ]
+        .iter()
+        .flat_map(|tsv| tsv.lines())
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(word, phonemes)| (word, phonemes.split(' ').collect()))
+        .collect()
+    });
 
 /// Converts a logographic word into the alphabetic-adjacent proxy spelling its G2P
 /// model was trained on (see `dictionary_for`'s doc comment) -- concatenated plain
@@ -222,7 +232,10 @@ pub fn transliterate(lang: &str, word: &str) -> Result<String> {
     if let Some(hangul) = dictionary_for(lang).and_then(|dict| dict.get(word)) {
         return Ok((*hangul).to_string());
     }
-    if lang == "eng" && !ENG_HAS_AUTHORITATIVE_ANSWER.contains(word) {
+    if lang == "eng" {
+        if let Some(phonemes) = ENG_AUTHORITATIVE_PHONEMES.get(word) {
+            return Ok(p2g::phonemes_to_hangul(phonemes));
+        }
         if let Ok(hangul) = decode_with_model(&ENG_US_MODEL, word) {
             return Ok(hangul);
         }
