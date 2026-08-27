@@ -38,11 +38,17 @@ fn unit_for(token: &str) -> Option<Unit> {
         // ARPABET->jamo table maps AH regardless of stress to the same jamo
         // (ᅥ, U+1165); grouping schwa with ɛ/e instead gave it a different
         // vowel quality than its own stressed form uses.
-        "ɜ" | "ʌ" | "ə" | "ɔ" | "ɚ" | "ɝ" => Unit::Vowel('ㅓ'),
+        "ɜ" | "ʌ" | "ə" | "ɚ" | "ɝ" => Unit::Vowel('ㅓ'),
         "ɑ" | "a" => Unit::Vowel('ㅏ'),
         "i" | "ɪ" => Unit::Vowel('ㅣ'),
         "u" | "ʊ" => Unit::Vowel('ㅜ'),
-        "o" | "oʊ" => Unit::Vowel('ㅗ'),
+        // "ɔ" (AO, as in "ball"/"call"/"talk"/"fall"/"hall") is its own vowel
+        // quality, distinct from ʌ/ə/ɜ/ɚ/ɝ -- confirmed against korean_go.tsv's
+        // official answers (볼/콜/토크/폴/홀, all ㅗ, never ㅓ). Grouped with
+        // "o"/"oʊ" since it renders the same way; see resolve_onset_vowel's
+        // Glide('W') arm for the one place a preceding "w" changes this
+        // (water/walk 워터/워크, not 오터/오크).
+        "o" | "oʊ" | "ɔ" => Unit::Vowel('ㅗ'),
         "ɡ" | "g" => Unit::Consonant('ㄱ'),
         "k" => Unit::Consonant('ㅋ'),
         "t" => Unit::Consonant('ㅌ'),
@@ -69,7 +75,21 @@ fn unit_for(token: &str) -> Option<Unit> {
         "m" => Unit::Consonant('ㅁ'),
         "n" => Unit::Consonant('ㄴ'),
         "ŋ" => Unit::Consonant('ㅇ'),
-        "l" | "ɫ" | "r" | "ɹ" => Unit::Consonant('ㄹ'),
+        "l" | "ɫ" => Unit::Consonant('ㄹ'),
+        // American /r/ (unlike /l/) vanishes entirely in Korean loanword
+        // convention whenever it isn't immediately followed by a vowel --
+        // confirmed against korean_go.tsv's official answers: "market" 마켓
+        // (not 마르켓/말켓), "Harvard" 하버드 (not 할바드), "Cardiff" 카디프,
+        // "party" 파티 -- a coda-position /r/ contributes nothing, not even a
+        // stray syllable, unlike /l/ in the same position ("self" 셀프,
+        // "world" 월드, which keep their ㄹ coda). Tracked as its own marker
+        // (matching the 'W'/'Y' glide-placeholder convention) rather than the
+        // real 'ㄹ' jamo so is_tail_consonant and render_stray_consonants can
+        // tell it apart from a genuine /l/ and drop it instead of rendering a
+        // coda or stray syllable; resolve_onset_vowel converts it to a normal
+        // 'ㄹ' onset in the one case it doesn't vanish -- immediately before a
+        // vowel ("hero" 히어로).
+        "r" | "ɹ" => Unit::Consonant('R'),
         "w" => Unit::Glide('W'),
         "j" => Unit::Glide('Y'),
         // Diphthongs arrive as one token from the decoder; push the first component
@@ -163,6 +183,12 @@ fn resolve_onset_vowel(onset: OnsetCandidate, vowel: char) -> (char, char) {
         (OnsetCandidate::Glide('W'), 'ㅐ') => ('ㅇ', 'ㅙ'),
         (OnsetCandidate::Glide('W'), 'ㅔ') => ('ㅇ', 'ㅞ'),
         (OnsetCandidate::Glide('W'), 'ㅓ') => ('ㅇ', 'ㅝ'),
+        // Korean has no separate "wo" compound distinct from ㅗ itself, so a
+        // "w" immediately before what would otherwise render as ㅗ (whether
+        // from "ɔ", "o", or "oʊ") takes the closest existing compound instead
+        // -- confirmed for "water"/"walk" 워터/워크 (not 오터/오크), both AO
+        // (ɔ) same as "ball"'s ㅗ when there's no preceding "w".
+        (OnsetCandidate::Glide('W'), 'ㅗ') => ('ㅇ', 'ㅝ'),
         (OnsetCandidate::Glide('W'), 'ㅣ') => ('ㅇ', 'ㅟ'),
         (OnsetCandidate::Glide('W'), 'ㅜ') => ('ㅇ', 'ㅜ'),
         (OnsetCandidate::Glide('Y'), 'ㅏ') => ('ㅇ', 'ㅑ'),
@@ -174,6 +200,10 @@ fn resolve_onset_vowel(onset: OnsetCandidate, vowel: char) -> (char, char) {
         (OnsetCandidate::Glide('Y'), 'ㅗ') => ('ㅇ', 'ㅛ'),
         (OnsetCandidate::Glide('Y'), 'ㅜ') => ('ㅇ', 'ㅠ'),
         (OnsetCandidate::Glide('Y'), 'ㅣ') => ('ㅇ', 'ㅣ'),
+        // The one case a coda-position-vanishing 'R' marker (see unit_for)
+        // doesn't vanish: immediately before a vowel, it's a genuine onset
+        // ("hero" 히어로) and renders as a normal ㄹ.
+        (OnsetCandidate::Consonant('R'), vowel) => ('ㄹ', vowel),
         (OnsetCandidate::Consonant(c), vowel) => (c, vowel),
         (OnsetCandidate::Glide(c), vowel) => (c, vowel), // unreachable in practice
         (OnsetCandidate::None, vowel) => ('ㅇ', vowel),
@@ -194,10 +224,25 @@ fn final_blend(cluster: &[char]) -> Option<(char, char)> {
     }
 }
 
+// 'ㄷ' and 'ㅅ' are deliberately excluded: a word-final /d/ or /s/ is never a
+// batchim in Korean loanword convention -- each is always its own full
+// syllable ("salad" 샐러드, "guard" 가드, "wood" 우드, "word" 워드, "card"
+// 카드, "kid" 키드 for /d/; "gas" 가스, "glass" 글라스, "miss" 미스, "bus"
+// 버스, "class" 클래스, "kiss" 키스 for /s/ -- 6/6 korean_go.tsv answers each,
+// no counter-examples found for either). Excluding them here routes to
+// render_stray_consonants' default ㅡ-vowel-syllable path instead of a coda.
+//
+// 'ㅌ'/'ㄱ'(g)/'ㅍ'(p)/'ㅂ' are NOT excluded despite similarly mixed evidence
+// ("net"/"let"/"set"/"bat"/"hit" all full-syllable vs "Gosset"/"Witt"/
+// "pivot" batchim for /t/; korean_go.tsv even carries two different answers
+// for the same word, "web" 웨브 and 웹) -- unlike /d/ and /s/, these
+// genuinely have no consistent rule to extract; which one an established
+// loanword picked appears to be per-word history, the same kind of
+// irreducible ambiguity as schwa placement (see unit_for's "ə" comment).
 fn is_tail_consonant(ch: char) -> bool {
     matches!(
         ch,
-        'ㄱ' | 'ㅋ' | 'ㄴ' | 'ㄷ' | 'ㅌ' | 'ㄹ' | 'ㅁ' | 'ㅂ' | 'ㅍ' | 'ㅅ' | 'ㅇ'
+        'ㄱ' | 'ㅋ' | 'ㄴ' | 'ㅌ' | 'ㄹ' | 'ㅁ' | 'ㅂ' | 'ㅍ' | 'ㅇ'
     )
 }
 
@@ -205,7 +250,7 @@ fn as_tail(ch: char) -> char {
     match ch {
         'ㅋ' => 'ㄱ',
         'ㅍ' => 'ㅂ',
-        'ㅌ' | 'ㄷ' => 'ㅅ',
+        'ㅌ' => 'ㅅ',
         other => other,
     }
 }
@@ -222,18 +267,25 @@ fn split_final_cluster(cluster: &[char]) -> (Option<char>, &[char]) {
 /// one became an onset) as their own syllables with a neutral vowel (ㅡ) — the
 /// `phoneme-gap-repaired` exception handling this crate's Allium contract requires.
 ///
-/// ㅈ/ㅊ (from dʒ/tʃ) are the one exception: Korean loanword convention gives a
+/// ㅈ/ㅊ (from dʒ/tʃ) are one exception: Korean loanword convention gives a
 /// stranded word-final affricate ㅣ instead of ㅡ ("message" 메시지, "language"
 /// 랭귀지, "package" 패키지, "orange" 오렌지 -- all end in 지, never 즈), unlike
 /// every other consonant class (스,트,드,크,그,프,브 etc. all correctly use ㅡ).
+///
+/// The 'R' marker (see unit_for) is the other exception: an American /r/ that
+/// ends up here (never immediately followed by a vowel -- otherwise it would
+/// already have become a real ㄹ onset via resolve_onset_vowel) contributes
+/// nothing at all, not even a syllable ("market" 마켓, not 마르켓; "star" 스타,
+/// not 스타르).
 fn render_stray_consonants(consonants: &[char]) -> String {
     consonants
         .iter()
-        .map(|&ch| match ch {
-            'W' => '우',
-            'Y' => '이',
-            'ㅈ' | 'ㅊ' => compose_syllable(ch, 'ㅣ', None),
-            ch => compose_syllable(ch, 'ㅡ', None),
+        .filter_map(|&ch| match ch {
+            'R' => None,
+            'W' => Some('우'),
+            'Y' => Some('이'),
+            'ㅈ' | 'ㅊ' => Some(compose_syllable(ch, 'ㅣ', None)),
+            ch => Some(compose_syllable(ch, 'ㅡ', None)),
         })
         .collect()
 }
@@ -317,7 +369,7 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                 if matches!(onset_char, Some('W') | Some('Y')) {
                     if let Some(&last) = pending.last() {
                         if last != 'W' && last != 'Y' {
-                            onset = last;
+                            onset = if last == 'R' { 'ㄹ' } else { last };
                             pending.pop();
                         }
                     }
@@ -655,6 +707,99 @@ mod tests {
             phonemes_to_hangul(&tokens(&["m", "ɛ", "s", "ɪ", "dʒ"])),
             "메시지"
         );
+    }
+
+    #[test]
+    fn ao_is_its_own_vowel_distinct_from_the_schwa_group() {
+        // "ball"/"call"/"fall"/"hall" -- confirmed against korean_go.tsv's
+        // official 볼/콜/폴/홀, all ㅗ, never ㅓ. (Not "talk": word-final /k/
+        // has the same kind of irreducible per-word batchim-vs-syllable
+        // ambiguity as /t/ -- "rock"/"look" 록/룩 vs "bank"/"pink" 뱅크/핑크 --
+        // unrelated to this vowel fix, so it doesn't belong in this test.)
+        assert_eq!(phonemes_to_hangul(&tokens(&["b", "ɔ", "l"])), "볼");
+        assert_eq!(phonemes_to_hangul(&tokens(&["k", "ɔ", "l"])), "콜");
+    }
+
+    #[test]
+    fn w_plus_ao_still_takes_the_wo_compound_like_w_plus_eo_does() {
+        // "water" 워터: Korean has no separate "wo" compound distinct from ㅗ
+        // itself, so a "w" before what would render as ㅗ takes the closest
+        // existing compound (ㅝ) instead, same as it already does for a
+        // genuine ʌ/ə-class vowel. (Not "walk": same word-final /k/ ambiguity
+        // as above, unrelated to this fix.)
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["w", "ɔ", "t", "ɝ"])),
+            "워터"
+        );
+    }
+
+    #[test]
+    fn an_r_before_another_consonant_vanishes_instead_of_becoming_a_coda() {
+        // Confirmed against korean_go.tsv's official answers: unlike /l/ (which
+        // keeps its coda in the same position -- "self" 셀프, "world" 월드),
+        // American /r/ contributes nothing at all when it isn't immediately
+        // followed by a vowel. Uses "e" rather than the literal schwa "ə" for
+        // "market"'s middle vowel, and "party"'s R+consonant+VOWEL shape for
+        // the second case, so this test isolates the /r/ rule from the
+        // separate (and separately documented) schwa- and stop-consonant-
+        // batchim ambiguities.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["m", "a", "ɹ", "k", "e", "t"])),
+            "마켓"
+        );
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["h", "a", "ɹ", "v", "ɝ", "d"])),
+            "하버드"
+        );
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["p", "a", "ɹ", "t", "i"])),
+            "파티"
+        );
+    }
+
+    #[test]
+    fn a_word_final_r_alone_vanishes_without_a_coda_or_a_stray_syllable() {
+        // "star"/"car" 스타/카, not 스타르/카르 or 스탈/칼.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["s", "t", "a", "ɹ"])),
+            "스타"
+        );
+        assert_eq!(phonemes_to_hangul(&tokens(&["k", "a", "ɹ"])), "카");
+    }
+
+    #[test]
+    fn a_word_final_d_is_always_a_full_syllable_never_a_batchim() {
+        // "salad" 샐러드, "card" 카드: confirmed against 6/6 korean_go.tsv
+        // answers with a word-final /d/, no counter-examples found -- unlike
+        // /t/, which genuinely has no consistent rule (net/let/set/bat/hit
+        // all full-syllable vs Gosset/Witt/pivot batchim). "salad"'s /l/ is
+        // pre-doubled (two 'l' tokens) the way build_training_corpus.py's
+        // double_intervocalic_l already leaves a raw-IPA source's genuine
+        // intervocalic /l/ -- this test isolates the /d/ rule, not that one.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["s", "æ", "l", "l", "ə", "d"])),
+            "샐러드"
+        );
+        assert_eq!(phonemes_to_hangul(&tokens(&["k", "a", "ɹ", "d"])), "카드");
+    }
+
+    #[test]
+    fn a_word_final_s_is_always_a_full_syllable_never_a_batchim() {
+        // "bus" 버스, "kiss" 키스: confirmed against 6/6 korean_go.tsv answers
+        // with a word-final /s/, no counter-examples found. (Not "gas": its
+        // established 가스 uses ㅏ for what cmudict transcribes as /æ/, a
+        // separate, already-known vowel-mapping irregularity unrelated to
+        // this /s/ rule.)
+        assert_eq!(phonemes_to_hangul(&tokens(&["b", "ʌ", "s"])), "버스");
+        assert_eq!(phonemes_to_hangul(&tokens(&["k", "ɪ", "s"])), "키스");
+    }
+
+    #[test]
+    fn an_r_immediately_before_a_vowel_is_still_a_real_onset() {
+        // The one case an 'R' marker doesn't vanish: immediately before a
+        // vowel, it's a real syllable onset, same as "market"'s middle
+        // consonant would be if it were followed by a vowel instead of "k".
+        assert_eq!(phonemes_to_hangul(&tokens(&["h", "i", "ɹ", "o"])), "히로");
     }
 
     #[test]
