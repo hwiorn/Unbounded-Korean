@@ -254,6 +254,59 @@ fn final_blend(cluster: &[char]) -> Option<(char, char)> {
     }
 }
 
+/// Whether `ch` is a plain stop/fricative that combines with a following liquid
+/// into one real English onset cluster (pl-/bl-/gl-/kl-/fl-/sl-, pr-/br-/gr-/kr-/
+/// fr-/tr-/dr-) -- see `split_onset_liquid_cluster`'s own doc comment for why that
+/// distinction matters here, separately from `is_tail_consonant`'s (which is about
+/// which single consonants can be a coda at all, not which consonant PAIRS form a
+/// valid English onset).
+fn is_onset_cluster_obstruent(ch: char) -> bool {
+    matches!(ch, 'ㅍ' | 'ㅂ' | 'ㄱ' | 'ㅋ' | 'ㅌ' | 'ㄷ' | 'ㅅ')
+}
+
+/// Splits a 2-consonant cluster immediately before a vowel into [the obstruent's
+/// own neutral syllable] + [what the upcoming vowel should claim as its onset],
+/// but only when the cluster is a genuine English onset cluster (obstruent +
+/// liquid) that real English syllabification keeps together at the START of a
+/// syllable -- unlike a pair such as Fonteyn's "nt", which splits ACROSS a
+/// syllable boundary (n stays as the coda of the syllable before it, t becomes the
+/// next syllable's onset; see `a_leading_consonant_in_a_cluster_becomes_a_coda_
+/// before_the_next_vowel`'s own test). Without this distinction, the general
+/// coda-peeling logic wrongly treated EVERY 2-consonant cluster the Fonteyn way,
+/// corrupting any word with a real onset cluster mid-word: "class" -> 크래스
+/// (should be 클래스), "program" -> 프록램 (should be 프로그램), "fabric" ->
+/// 팹릭 (should be 패브릭).
+///
+/// A literal 'ㄹ' (real /l/) comes back doubled -- once as this new syllable's own
+/// batchim, once still in the remainder for the next vowel to ALSO claim as an
+/// onset ("class" 클래스, "black" 블랙) -- the same doubled-liquid shape Korean
+/// convention already uses when a source word's own spelling repeats an
+/// intervocalic /l/ (see `unit_for`'s "l"/"ɫ" comment), just triggered here by
+/// cluster shape instead of two identical trained tokens. The 'R' marker (real
+/// American /r/, which `unit_for`'s own comment says never becomes a batchim at
+/// all) instead leaves this new syllable bare and hands only 'R' onward -- it
+/// resolves to a normal ㄹ onset once `resolve_onset_vowel` sees it immediately
+/// before the next vowel, the same "hero" 히로 rule already in place ("program"
+/// 프로그램, "brake" 브레이크).
+///
+/// Returns `None` for anything else (not exactly 2 elements, or a first element
+/// that isn't a real onset-forming obstruent), leaving the caller's existing
+/// coda-peeling logic untouched -- including the doubled-'ㄹ'-'ㄹ' case ("mileage"
+/// 마일리지), since 'ㄹ' itself is a liquid, not an obstruent.
+fn split_onset_liquid_cluster(cluster: &[char]) -> Option<(char, Vec<char>)> {
+    let [first, second] = cluster else {
+        return None;
+    };
+    if !is_onset_cluster_obstruent(*first) {
+        return None;
+    }
+    match second {
+        'ㄹ' => Some((*first, vec!['ㄹ'])),
+        'R' => Some((*first, vec!['R'])),
+        _ => None,
+    }
+}
+
 // 'ㄷ' and 'ㅅ' are deliberately excluded: a word-final /d/ or /s/ is never a
 // batchim in Korean loanword convention -- each is always its own full
 // syllable ("salad" 샐러드, "guard" 가드, "wood" 우드, "word" 워드, "card"
@@ -421,7 +474,23 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                     }
                 }
                 if !pending.is_empty() {
-                    out.push_str(&render_stray_consonants(&pending));
+                    // "class" k+l+æ+s, "black" b+l+æ+k: pending holds exactly the
+                    // leading obstruent (e.g. ㅋ/ㅂ) once the liquid onset_char
+                    // above was already popped as this vowel's own onset -- an
+                    // onset-cluster shape, not a genuine coda, so it must render
+                    // WITH the doubled 'ㄹ' as its batchim (클/블), not as a bare
+                    // stray syllable (크/브) -- see split_onset_liquid_cluster's
+                    // own doc comment. "brake"/"program"'s obstruent+'R' never
+                    // doubles (real /r/ has no batchim at all), so that stays bare.
+                    if pending.len() == 1
+                        && is_onset_cluster_obstruent(pending[0])
+                        && matches!(onset_char, Some('ㄹ') | Some('R'))
+                    {
+                        let batchim = (onset_char == Some('ㄹ')).then_some('ㄹ');
+                        out.push(compose_syllable(pending[0], 'ㅡ', batchim));
+                    } else {
+                        out.push_str(&render_stray_consonants(&pending));
+                    }
                     pending.clear();
                 }
 
@@ -463,6 +532,21 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                 let next_is_vowel = j < units.len() && matches!(units[j], Unit::Vowel(_));
 
                 if next_is_vowel {
+                    if let Some((obstruent, next_onset)) = split_onset_liquid_cluster(&after) {
+                        // "program" p+r+oʊ+g+r+æ+m, "fabric" f+æ+b+r+ɪ+k: the
+                        // trailing g+r/b+r is a real English onset cluster, not a
+                        // cross-syllable pair like Fonteyn's n+t -- this syllable
+                        // takes NO coda from it at all, the obstruent gets its own
+                        // neutral syllable, and what's left (doubled 'ㄹ', or bare
+                        // 'R') becomes the NEXT vowel's onset. See
+                        // split_onset_liquid_cluster's own doc comment.
+                        out.push(compose_syllable(onset, vowel, None));
+                        let batchim = (next_onset == ['ㄹ']).then_some('ㄹ');
+                        out.push(compose_syllable(obstruent, 'ㅡ', batchim));
+                        pending = next_onset;
+                        i = j;
+                        continue;
+                    }
                     let peeled = if after.len() > 1 {
                         match split_final_cluster(&after) {
                             (Some(tail), rest) => Some((tail, rest)),
@@ -916,6 +1000,38 @@ mod tests {
         assert_eq!(
             phonemes_to_hangul(&tokens(&["p", "o", "n", "t", "e", "i", "n"])),
             "폰테인"
+        );
+    }
+
+    #[test]
+    fn a_leading_obstruent_liquid_onset_cluster_does_not_split_like_fonteyns() {
+        // "class" k+l+æ+s: unlike Fonteyn's "nt" (a genuine cross-syllable pair),
+        // "kl" is one real English onset cluster -- the k must get its own
+        // neutral syllable WITH the doubled 'ㄹ' as its batchim (클), not a bare
+        // stray syllable (크), confirmed against korean_go.tsv's own established
+        // 클래스 (cited by is_tail_consonant's own /s/-never-batchim comment).
+        assert_eq!(phonemes_to_hangul(&tokens(&["k", "l", "æ", "s"])), "클래스");
+        // "black" b+l+æ+k: same doubled-ㄹ pattern, confirmed against
+        // korean_go.tsv's 블랙.
+        assert_eq!(phonemes_to_hangul(&tokens(&["b", "l", "æ", "k"])), "블랙");
+    }
+
+    #[test]
+    fn a_trailing_obstruent_liquid_onset_cluster_does_not_split_like_fonteyns() {
+        // "program" p+r+oʊ+g+r+æ+m: the trailing "gr" is a real onset cluster,
+        // not Fonteyn's cross-syllable "nt" -- 오 must take NO coda from it at
+        // all (프로, not 프록), confirmed against korean_go.tsv's 프로그램. Real
+        // American /r/ never doubles into a batchim (unit_for's own comment), so
+        // this stays bare -- unlike the literal-'ㄹ' case above.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["p", "r", "oʊ", "g", "r", "æ", "m"])),
+            "프로그램"
+        );
+        // "fabric" f+æ+b+r+ɪ+k: same bare-obstruent pattern, confirmed against
+        // korean_go.tsv's 패브릭 (not the "팹릭" a coda-peeling read would give).
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["f", "æ", "b", "r", "ɪ", "k"])),
+            "패브릭"
         );
     }
 
