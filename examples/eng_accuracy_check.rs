@@ -16,10 +16,32 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 
+/// Some words appear more than once in korean_go.tsv with genuinely different
+/// Hangul answers (329 of them, e.g. "Daniel" -> 대니얼 eighteen times, 다니엘
+/// once) -- checking against whichever occurrence happens to load last into a
+/// HashMap is arbitrary and can grade a correct majority-convention answer as
+/// wrong. This picks the most-frequent answer per word instead (ties broken by
+/// first occurrence), matching hangul_answer_to_ipa_corpus.rs's own
+/// majority_hangul so the benchmark checks against the same answer eng.dict was
+/// actually trained on.
+fn majority_hangul(answers: &[String]) -> String {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for a in answers {
+        *counts.entry(a.as_str()).or_insert(0) += 1;
+    }
+    let max = *counts.values().max().expect("answers is non-empty");
+    answers
+        .iter()
+        .find(|a| counts[a.as_str()] == max)
+        .expect("some answer reaches the max count")
+        .clone()
+}
+
 fn main() {
     let lang = env::args().nth(1).unwrap_or_else(|| "eng".to_string());
     let korean_go = fs::read_to_string("data/corpus/korean_go.tsv").unwrap();
-    let mut truth: HashMap<String, String> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    let mut answers: HashMap<String, Vec<String>> = HashMap::new();
     for line in korean_go.lines() {
         let cols: Vec<&str> = line.split('\t').collect();
         if cols.len() != 2 {
@@ -27,9 +49,22 @@ fn main() {
         }
         let (word, hangul) = (cols[0], cols[1]);
         if word.chars().all(|c| c.is_ascii_alphabetic()) {
-            truth.insert(word.to_string(), hangul.to_string());
+            answers
+                .entry(word.to_string())
+                .or_insert_with(|| {
+                    order.push(word.to_string());
+                    Vec::new()
+                })
+                .push(hangul.to_string());
         }
     }
+    let truth: HashMap<String, String> = order
+        .into_iter()
+        .map(|word| {
+            let hangul = majority_hangul(&answers[&word]);
+            (word, hangul)
+        })
+        .collect();
     let total = truth.len();
     let mut correct = 0;
     let mut all_wrong = Vec::new();

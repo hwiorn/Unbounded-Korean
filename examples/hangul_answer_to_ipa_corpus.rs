@@ -21,7 +21,7 @@
 // LAST column is the Hangul answer (matches both hsl_seed.tsv's lang\tword\thangul
 // and korean_go.tsv's word\thangul).
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 
@@ -29,6 +29,28 @@ fn is_clean_word(word: &str) -> bool {
     // Unicode-aware, not ASCII-only: German (Königen, Fräulein), and every other
     // Latin-script language beyond English, routinely need diacritics.
     !word.is_empty() && word.chars().all(|c| c.is_alphabetic() || c == '\'')
+}
+
+/// Some source files (korean_go.tsv especially) record the same word more than
+/// once with genuinely different Hangul answers -- 329 words in korean_go.tsv
+/// alone, e.g. "Daniel" -> 대니얼 eighteen times, 다니엘 once (almost certainly a
+/// one-off transcription slip, or a different specific person's name that happens
+/// to share the English spelling). Training on whichever occurrence happened to
+/// come first in the file is arbitrary and, worse, can pick the minority spelling
+/// over an 18-1 majority -- this picks the most-frequent answer instead, breaking
+/// a genuine tie by whichever tied answer appears first (deterministic, and
+/// matches what a benchmark checking the same source should also pick).
+fn majority_hangul(answers: &[String]) -> String {
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for a in answers {
+        *counts.entry(a.as_str()).or_insert(0) += 1;
+    }
+    let max = *counts.values().max().expect("answers is non-empty");
+    answers
+        .iter()
+        .find(|a| counts[a.as_str()] == max)
+        .expect("some answer reaches the max count")
+        .clone()
 }
 
 /// Returns (space-joined phonemes that verifiably round-trip back to `hangul` via
@@ -68,22 +90,35 @@ fn main() {
     let mut filtered_out = fs::File::create(filtered_path).expect("create filtered output");
     let mut raw_out = fs::File::create(raw_path).expect("create raw output");
 
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut written = 0usize;
-    let mut skipped = 0usize;
+    let mut order: Vec<String> = Vec::new();
+    let mut answers: HashMap<String, Vec<String>> = HashMap::new();
+    let mut malformed = 0usize;
     for line in content.lines() {
         let cols: Vec<&str> = line.split('\t').collect();
         if cols.len() < 2 {
-            skipped += 1;
+            malformed += 1;
             continue;
         }
         let word = cols[0];
         let hangul = cols[cols.len() - 1];
-        if !is_clean_word(word) || !seen.insert(word.to_string()) {
-            skipped += 1;
+        if !is_clean_word(word) {
+            malformed += 1;
             continue;
         }
-        match hangul_to_ipa(hangul) {
+        answers
+            .entry(word.to_string())
+            .or_insert_with(|| {
+                order.push(word.to_string());
+                Vec::new()
+            })
+            .push(hangul.to_string());
+    }
+
+    let mut written = 0usize;
+    let mut skipped = 0usize;
+    for word in &order {
+        let hangul = majority_hangul(&answers[word]);
+        match hangul_to_ipa(&hangul) {
             Some((filtered, raw)) => {
                 writeln!(filtered_out, "{word}\t{filtered}").expect("write filtered");
                 writeln!(raw_out, "{word}\t{hangul}\t{raw}").expect("write raw");
@@ -95,12 +130,30 @@ fn main() {
             }
         }
     }
-    eprintln!("done: {written} written, {skipped} skipped");
+    eprintln!("done: {written} written, {skipped} skipped, {malformed} malformed lines");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn majority_hangul_picks_the_most_frequent_answer() {
+        let answers: Vec<String> = ["대니얼", "다니엘", "대니얼"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(majority_hangul(&answers), "대니얼");
+    }
+
+    #[test]
+    fn majority_hangul_breaks_a_genuine_tie_by_first_occurrence() {
+        let answers: Vec<String> = ["알베르스", "앨버스"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(majority_hangul(&answers), "알베르스");
+    }
 
     #[test]
     fn accepts_words_with_non_ascii_letters_but_rejects_multi_word_phrases() {
