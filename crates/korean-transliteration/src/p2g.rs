@@ -201,7 +201,7 @@ fn final_blend(cluster: &[char]) -> Option<(char, char)> {
 fn is_tail_consonant(ch: char) -> bool {
     matches!(
         ch,
-        'ㄱ' | 'ㅋ' | 'ㄴ' | 'ㄷ' | 'ㄹ' | 'ㅁ' | 'ㅂ' | 'ㅍ' | 'ㅅ' | 'ㅇ'
+        'ㄱ' | 'ㅋ' | 'ㄴ' | 'ㄷ' | 'ㅌ' | 'ㄹ' | 'ㅁ' | 'ㅂ' | 'ㅍ' | 'ㅅ' | 'ㅇ'
     )
 }
 
@@ -316,23 +316,34 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                 let next_is_vowel = j < units.len() && matches!(units[j], Unit::Vowel(_));
 
                 if next_is_vowel {
-                    if matches!(after.first(), Some('ㄹ')) && after.len() > 1 {
-                        // ㄹ followed by another consonant, with a vowel further
-                        // ahead: ㄹ becomes THIS syllable's coda ("LG" 엘지, not
-                        // 에르지 -- leaving all of `after` for the next vowel's
-                        // onset-pop would strand ㄹ as its own 르 syllable
-                        // instead). This also covers a genuinely doubled ㄹ from
-                        // the training data (after == ['ㄹ', 'ㄹ'], "mileage"
-                        // 마일리지): the first becomes this syllable's coda, the
-                        // second queues as the next syllable's onset. A single ㄹ
-                        // (after.len() == 1) is deliberately NOT special-cased
-                        // here -- it falls to the plain branch below and becomes
-                        // only the next syllable's onset, since a source /l/ or
-                        // /r/ that was never doubled must not be forced into one
-                        // ("neuron" 뉴런, not 뉼런; see collapse_geminate_consonants).
-                        out.push(compose_syllable(onset, vowel, Some('ㄹ')));
-                        pending = after[1..].to_vec();
+                    let peeled = if after.len() > 1 {
+                        match split_final_cluster(&after) {
+                            (Some(tail), rest) => Some((tail, rest)),
+                            (None, _) => None,
+                        }
                     } else {
+                        None
+                    };
+                    if let Some((tail, rest)) = peeled {
+                        // A leading consonant in a cluster, with more consonants
+                        // still ahead and a vowel further ahead still, becomes
+                        // THIS syllable's coda instead of stranding into
+                        // `pending` alongside the rest ("Fonteyn" 폰테인, not
+                        // 포느테인 -- the trailing n+t cluster's n must become
+                        // 폰's coda, not get flushed as its own 느 syllable once
+                        // t claims the next onset). Generalizes the old ㄹ-only
+                        // rule ("LG" 엘지) and the genuinely-doubled-liquid case
+                        // ("mileage" 마일리지, after == ['ㄹ', 'ㄹ']) to any
+                        // tail-eligible leading consonant.
+                        out.push(compose_syllable(onset, vowel, Some(tail)));
+                        pending = rest.to_vec();
+                    } else {
+                        // Either a single consonant (never gets a coda here --
+                        // it becomes only the next syllable's onset, since a
+                        // source /l/ or /r/ that was never doubled must not be
+                        // forced into one: "neuron" 뉴런, not 뉼런; see
+                        // collapse_geminate_consonants) or a cluster whose
+                        // leading consonant isn't coda-eligible at all.
                         out.push(compose_syllable(onset, vowel, None));
                         pending = after;
                     }
@@ -514,6 +525,31 @@ mod tests {
         assert_eq!(
             phonemes_to_hangul(&tokens(&["h", "o", "k", "ɯ", "l", "l", "i"])),
             "호클리"
+        );
+    }
+
+    #[test]
+    fn a_word_final_tieut_becomes_a_siot_coda_not_a_stray_syllable() {
+        // "Gosset" 고셋: word-final "t" (ㅌ) must become ㅅ 받침 like ㄷ already
+        // does -- is_tail_consonant was missing 'ㅌ' even though as_tail already
+        // knew how to convert it, so this always fell through to a stray "트"
+        // syllable instead (고세트).
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["ɡ", "o", "s", "e", "t"])),
+            "고셋"
+        );
+    }
+
+    #[test]
+    fn a_leading_consonant_in_a_cluster_becomes_a_coda_before_the_next_vowel() {
+        // "Fonteyn" 폰테인: the "n t" cluster between o and e must split into
+        // 폰's coda (n) and 테's onset (t), not strand into `pending` together
+        // and flush n as its own stray "느" syllable once t claims the onset
+        // (포느테인). Generalizes the old ㄹ-only ("LG" 엘지) coda-carry rule to
+        // any tail-eligible leading consonant.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["p", "o", "n", "t", "e", "i", "n"])),
+            "폰테인"
         );
     }
 
