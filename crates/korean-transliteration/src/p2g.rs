@@ -81,9 +81,30 @@ fn unit_for(token: &str) -> Option<Unit> {
         "p" => Unit::Consonant('ㅍ'),
         "b" => Unit::Consonant('ㅂ'),
         "f" => Unit::Consonant('ㅍ'),
-        "v" => Unit::Consonant('ㅂ'),
+        // Word-final /v/ is never a batchim in Korean loanword convention --
+        // unlike its voiceless counterpart /b/ (genuinely mixed, see
+        // is_tail_consonant's own comment), it's always its own full syllable
+        // (confirmed against korean_go.tsv: 40/40 word-final /v/ answers use ㅂ+ㅡ,
+        // "drive" 드라이브, "love" 러브, "glove" 글러브, no counter-examples).
+        // Since /v/ and /b/ share the same onset jamo ㅂ, this needs its own
+        // marker (matching the 'R'/'W'/'Y' placeholder convention) so
+        // is_tail_consonant/render_stray_consonants can tell them apart; without
+        // it "drive" rendered as 드라입 (a /b/-style batchim guess) instead.
+        "v" => Unit::Consonant('V'),
         "s" | "θ" => Unit::Consonant('ㅅ'),
-        "z" | "ð" => Unit::Consonant('ㅈ'),
+        // Word-final /z/ predominantly renders as ㅅ+ㅡ ("스"), not ㅈ -- Korean
+        // convention mostly follows the WRITTEN "-s" (plural/possessive or just
+        // spelled that way: "news" 뉴스, "James" 제임스, "Dickens" 디킨스) over the
+        // actual /z/ sound, confirmed 329/415 word-final /z/ answers in
+        // korean_go.tsv. A word instead spelled "-se"/"-ze" ("cheese" 치즈) wants
+        // ㅈ, but that split depends on English spelling this pipeline never
+        // sees at the phoneme level -- the same kind of irreducible-from-phonemes
+        // ambiguity as the T/K/G/P/B batchim-vs-syllable choice (see
+        // is_tail_consonant's own comment), so this picks the confirmed majority
+        // as the best available default. Needs its own marker, distinct from
+        // "dʒ"/"ʒ" (which correctly keep the ㅣ-ending affricate treatment below,
+        // confirmed 3/3 for ʒ: "massage" 마사지, "beige" 베이지).
+        "z" | "ð" => Unit::Consonant('Z'),
         "ʃ" => Unit::Consonant('ㅅ'),
         "ʒ" => Unit::Consonant('ㅈ'),
         "tʃ" => Unit::Consonant('ㅊ'),
@@ -234,6 +255,13 @@ fn resolve_onset_vowel(onset: OnsetCandidate, vowel: char) -> (char, char) {
         // doesn't vanish: immediately before a vowel, it's a genuine onset
         // ("hero" 히어로) and renders as a normal ㄹ.
         (OnsetCandidate::Consonant('R'), vowel) => ('ㄹ', vowel),
+        // The 'V'/'Z' markers (see unit_for's own comments) resolve to their
+        // real onset jamo as soon as a vowel follows directly -- "video" 비디오,
+        // "zero" 제로 -- the same real-onset treatment 'R' gets above; only their
+        // STRAY-syllable rendering differs from a plain ㅂ/ㅈ (see
+        // render_stray_consonants).
+        (OnsetCandidate::Consonant('V'), vowel) => ('ㅂ', vowel),
+        (OnsetCandidate::Consonant('Z'), vowel) => ('ㅈ', vowel),
         (OnsetCandidate::Consonant(c), vowel) => (c, vowel),
         (OnsetCandidate::Glide(c), vowel) => (c, vowel), // unreachable in practice
         (OnsetCandidate::None, vowel) => ('ㅇ', vowel),
@@ -360,6 +388,12 @@ fn split_final_cluster(cluster: &[char]) -> (Option<char>, &[char]) {
 /// already have become a real ㄹ onset via resolve_onset_vowel) contributes
 /// nothing at all, not even a syllable ("market" 마켓, not 마르켓; "star" 스타,
 /// not 스타르).
+///
+/// 'V' and 'Z' (see unit_for's own comments) are two more exceptions: they
+/// render with a DIFFERENT jamo than their real onset form uses, not just a
+/// different vowel -- 'V' always renders as a plain ㅂ+ㅡ ("drive" 드라이브,
+/// never the ㅣ-ending or a batchim a real /b/ might take), and 'Z' as ㅅ+ㅡ
+/// (matching the majority written "-s" pattern, not ㅈ).
 fn render_stray_consonants(consonants: &[char]) -> String {
     consonants
         .iter()
@@ -367,6 +401,8 @@ fn render_stray_consonants(consonants: &[char]) -> String {
             'R' => None,
             'W' => Some('우'),
             'Y' => Some('이'),
+            'V' => Some(compose_syllable('ㅂ', 'ㅡ', None)),
+            'Z' => Some(compose_syllable('ㅅ', 'ㅡ', None)),
             'ㅈ' | 'ㅊ' => Some(compose_syllable(ch, 'ㅣ', None)),
             ch => Some(compose_syllable(ch, 'ㅡ', None)),
         })
@@ -468,7 +504,12 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                 if matches!(onset_char, Some('W') | Some('Y')) {
                     if let Some(&last) = pending.last() {
                         if last != 'W' && last != 'Y' {
-                            onset = if last == 'R' { 'ㄹ' } else { last };
+                            onset = match last {
+                                'R' => 'ㄹ',
+                                'V' => 'ㅂ',
+                                'Z' => 'ㅈ',
+                                other => other,
+                            };
                             pending.pop();
                         }
                     }
@@ -645,6 +686,44 @@ mod tests {
         // for "f" — the two were previously merged into one arm, which is wrong for
         // v-containing words like the NAVER brand-name training entry).
         assert_eq!(phonemes_to_hangul(&tokens(&["n", "eɪ", "v", "ɝ"])), "네이버");
+    }
+
+    #[test]
+    fn a_word_final_v_is_always_a_full_syllable_never_a_batchim() {
+        // "drive" 드라이브, "love" 러브, "glove" 글러브: confirmed against 40/40
+        // korean_go.tsv word-final /v/ answers, no counter-examples -- unlike its
+        // voiceless counterpart /b/ (genuinely mixed, e.g. "web" 웨브/웹), /v/
+        // never takes a batchim. "d ɹ aɪ v" used to render as 드라입 (a /b/-style
+        // batchim guess) since /v/ and /b/ shared the same onset jamo with no way
+        // to tell them apart once stranded.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["d", "r", "aɪ", "v"])),
+            "드라이브"
+        );
+        assert_eq!(phonemes_to_hangul(&tokens(&["l", "ʌ", "v"])), "러브");
+    }
+
+    #[test]
+    fn a_word_final_z_defaults_to_a_siot_syllable_not_a_jieut_one() {
+        // "news" 뉴스: confirmed 329/415 word-final /z/ answers in korean_go.tsv
+        // use ㅅ+ㅡ ("스"), following the WRITTEN "-s" over the actual /z/ sound
+        // -- a word instead spelled "-se"/"-ze" ("cheese" 치즈) wants ㅈ, but
+        // that split depends on English spelling this pipeline never sees at the
+        // phoneme level (the same kind of irreducible ambiguity as T/K/G/P/B's
+        // batchim-vs-syllable choice), so this picks the confirmed majority.
+        // "z" must NOT pick up "dʒ"/"ʒ"'s own ㅣ-ending affricate exception
+        // either (previously "please" -> 플리지 instead of a plain-ㅡ ending).
+        assert_eq!(phonemes_to_hangul(&tokens(&["n", "u", "z"])), "누스");
+    }
+
+    #[test]
+    fn onset_z_still_renders_as_a_real_jieut() {
+        // "zero" (verifying only the onset side -- its overall answer 제로 needs
+        // a separate, pre-existing ɪ-vs-ㅔ vowel-choice fix this doesn't touch):
+        // the 'Z' marker must still resolve to a genuine ㅈ onset immediately
+        // before a vowel, exactly like a real /z/ would, not just at the
+        // stray-syllable ending its own marker changes.
+        assert_eq!(phonemes_to_hangul(&tokens(&["z", "i"])), "지");
     }
 
     #[test]
