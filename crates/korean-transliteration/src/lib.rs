@@ -37,6 +37,15 @@ macro_rules! lang_model {
 }
 
 lang_model!(ENG_MODEL, "../../../data/eng.fst.gz");
+// "eng" trains on Korea's own established loanword convention (korean_go/muik/
+// hsl_eng, all derived from a real human-verified Hangul answer): "mileage" -> 마일리지.
+// "eng-us" trains purely on cmudict's American English pronunciation, with no
+// Korean convention involved at all: "mileage" -> whatever P2G renders from the
+// real /ˈmaɪlɪdʒ/ phonemes, which needn't match the established spelling. Neither
+// is "more correct" than the other -- they answer different questions ("how do
+// Koreans actually write this" vs "what does this sound like transliterated
+// literally").
+lang_model!(ENG_US_MODEL, "../../../data/eng_us.fst.gz");
 lang_model!(NLD_MODEL, "../../../data/nld.fst.gz");
 lang_model!(ITA_MODEL, "../../../data/ita.fst.gz");
 lang_model!(DEU_MODEL, "../../../data/deu.fst.gz");
@@ -78,6 +87,7 @@ lang_model!(WLM_MODEL, "../../../data/wlm.fst.gz");
 fn model_for(lang: &str) -> Option<&'static Model> {
     match lang {
         "eng" | "en" => Some(&ENG_MODEL),
+        "eng-us" | "en-us" => Some(&ENG_US_MODEL),
         "nld" | "nl" => Some(&NLD_MODEL),
         "ita" | "it" => Some(&ITA_MODEL),
         "deu" | "de" => Some(&DEU_MODEL),

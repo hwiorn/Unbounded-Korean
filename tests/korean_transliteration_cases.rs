@@ -50,3 +50,27 @@ fn matches_ordinary_word_cases() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// "eng" and "eng-us" are trained on deliberately different corpora, not the
+/// same data with different priority: "eng" merges only Hangul-answer-derived
+/// sources (misaki-seeded, then hsl_eng/muik/korean_go override where they
+/// have an entry) -- Korea's own established loanword convention. "eng-us" is
+/// cmudict alone -- real American pronunciation, with no Korean convention
+/// involved. They can legitimately disagree ("mileage" 마일리지 vs 마일레즈,
+/// since cmudict's schwa-heavy AH0 pronunciation doesn't match the established
+/// spelling) -- neither is "wrong", they answer different questions. An
+/// acronym like "SKT" is a Korean-orthography convention (spelling out each
+/// letter's Korean name) with no equivalent in real English pronunciation, so
+/// "eng-us" has nothing to decode it from at all.
+#[test]
+fn eng_and_eng_us_answer_different_questions_for_the_same_word() {
+    assert_eq!(
+        korean_transliteration::transliterate("eng", "mileage").unwrap(),
+        "마일리지"
+    );
+    assert_eq!(
+        korean_transliteration::transliterate("eng-us", "mileage").unwrap(),
+        "마일레즈"
+    );
+    assert!(korean_transliteration::transliterate("eng-us", "SKT").is_err());
+}
