@@ -77,3 +77,33 @@ fn eng_and_eng_us_answer_different_questions_for_the_same_word() {
     );
     assert!(korean_transliteration::transliterate("eng-us", "SKT").is_err());
 }
+
+/// A word with no entry in any Hangul-answer-derived source (hsl_eng/muik/
+/// korean_go) trained "eng" on nothing but misaki's guess -- "eng" now
+/// substitutes "eng-us"'s cmudict-based decode for exactly these words
+/// instead, at the application level (mixing cmudict into eng.dict's own
+/// training corpus measurably hurt accuracy even for words the merge never
+/// touched -- see the reverted "eng.dict gap-filler" commit). A word that DOES
+/// have an authoritative answer ("mileage", "SKT") is untouched by this and
+/// keeps using "eng"'s own trained answer.
+#[test]
+fn eng_substitutes_eng_us_only_for_words_with_no_authoritative_answer() {
+    assert_eq!(
+        korean_transliteration::transliterate("eng", "mileage").unwrap(),
+        "마일리지"
+    );
+    assert_eq!(
+        korean_transliteration::transliterate("eng", "SKT").unwrap(),
+        "에스케이티"
+    );
+    // "photosynthesis" and "onboarding" have no hsl_eng/muik/korean_go entry --
+    // this just confirms the substitution actually runs (matches "eng-us"'s own
+    // decode of the same word), not any particular Hangul spelling.
+    for word in ["photosynthesis", "onboarding"] {
+        assert_eq!(
+            korean_transliteration::transliterate("eng", word).unwrap(),
+            korean_transliteration::transliterate("eng-us", word).unwrap(),
+            "{word} should be decoded via eng-us, not eng's own misaki-only guess"
+        );
+    }
+}
