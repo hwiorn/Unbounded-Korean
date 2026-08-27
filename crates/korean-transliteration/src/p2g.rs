@@ -32,8 +32,13 @@ enum Unit {
 fn unit_for(token: &str) -> Option<Unit> {
     Some(match token {
         "æ" => Unit::Vowel('ㅐ'),
-        "ɛ" | "ə" | "e" | "ᵻ" => Unit::Vowel('ㅔ'),
-        "ɜ" | "ʌ" | "ɔ" | "ɚ" | "ɝ" => Unit::Vowel('ㅓ'),
+        "ɛ" | "e" | "ᵻ" => Unit::Vowel('ㅔ'),
+        // "ə" (the unstressed schwa) is ARPABET AH0 -- the same base vowel as
+        // stressed "ʌ" (AH1/AH2), just reduced. crates/g2pk's established
+        // ARPABET->jamo table maps AH regardless of stress to the same jamo
+        // (ᅥ, U+1165); grouping schwa with ɛ/e instead gave it a different
+        // vowel quality than its own stressed form uses.
+        "ɜ" | "ʌ" | "ə" | "ɔ" | "ɚ" | "ɝ" => Unit::Vowel('ㅓ'),
         "ɑ" | "a" => Unit::Vowel('ㅏ'),
         "i" | "ɪ" => Unit::Vowel('ㅣ'),
         "u" | "ʊ" => Unit::Vowel('ㅜ'),
@@ -125,19 +130,19 @@ fn tokens_to_units<S: AsRef<str>>(phonemes: &[S]) -> Vec<Unit> {
 /// English words ending in a syllabic consonant spelled "-Cəl" (apple, table, little)
 /// drop the schwa in Korean loanword convention: the consonant before the schwa and
 /// the trailing /l/ merge into one "consonant + ㅡ + ㄹ" syllable instead of the schwa
-/// getting its own syllable (애플, not 애펠). Ported from hangulize-rs's
+/// getting its own syllable (애플, not 애펄). Ported from hangulize-rs's
 /// `collapse_syllabic_schwa_l`.
 ///
-/// `is_schwa[i]` must be checked alongside `units[i]` -- unit_for merges "ə", "ɛ",
-/// "e", and "ᵻ" into the same Unit::Vowel('ㅔ') target, but only a literal schwa
-/// drops out this way. An ordinary /ɛ/ or /e/ before a word-final L is a real
-/// vowel that keeps its own syllable ("cell" 셀, not 스르; "Cornell" 코넬, not
-/// 콘르) -- checking only the merged jamo like the original version did collapsed
+/// `is_schwa[i]` must be checked alongside `units[i]` -- unit_for merges "ə" into
+/// the same Unit::Vowel('ㅓ') target as "ʌ"/"ɜ"/"ɔ"/"ɚ"/"ɝ" (they're the same base
+/// vowel; see unit_for's comment), but only a literal schwa drops out this way. An
+/// ordinary stressed /ʌ/ before a word-final L is a real vowel that keeps its own
+/// syllable ("gull" 걸, not 그르) -- checking only the merged jamo would collapse
 /// those too.
 fn collapse_syllabic_schwa_l(units: Vec<Unit>, is_schwa: &[bool]) -> Vec<Unit> {
     let mut out = Vec::with_capacity(units.len());
     for (i, unit) in units.iter().copied().enumerate() {
-        let syllabic_l = matches!(unit, Unit::Vowel('ㅔ'))
+        let syllabic_l = matches!(unit, Unit::Vowel('ㅓ'))
             && is_schwa[i]
             && i > 0
             && i + 1 == units.len().saturating_sub(1)
@@ -216,12 +221,18 @@ fn split_final_cluster(cluster: &[char]) -> (Option<char>, &[char]) {
 /// they trail the word or a run of consecutive consonants left extras after the first
 /// one became an onset) as their own syllables with a neutral vowel (ㅡ) — the
 /// `phoneme-gap-repaired` exception handling this crate's Allium contract requires.
+///
+/// ㅈ/ㅊ (from dʒ/tʃ) are the one exception: Korean loanword convention gives a
+/// stranded word-final affricate ㅣ instead of ㅡ ("message" 메시지, "language"
+/// 랭귀지, "package" 패키지, "orange" 오렌지 -- all end in 지, never 즈), unlike
+/// every other consonant class (스,트,드,크,그,프,브 etc. all correctly use ㅡ).
 fn render_stray_consonants(consonants: &[char]) -> String {
     consonants
         .iter()
         .map(|&ch| match ch {
             'W' => '우',
             'Y' => '이',
+            'ㅈ' | 'ㅊ' => compose_syllable(ch, 'ㅣ', None),
             ch => compose_syllable(ch, 'ㅡ', None),
         })
         .collect()
@@ -633,6 +644,31 @@ mod tests {
         assert_eq!(
             phonemes_to_hangul(&tokens(&["l", "i", "t", "ɯ", "l"])),
             "리틀"
+        );
+    }
+
+    #[test]
+    fn a_word_final_affricate_gets_an_i_not_a_neutral_vowel() {
+        // "message" 메시지, not 메시즈: a stranded word-final ㅈ/ㅊ takes ㅣ, unlike
+        // every other consonant class (스,트,드,크 etc. all correctly take ㅡ).
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["m", "ɛ", "s", "ɪ", "dʒ"])),
+            "메시지"
+        );
+    }
+
+    #[test]
+    fn schwa_matches_crates_g2pks_established_ah_mapping() {
+        // crates/g2pk's ARPABET->jamo table sends AH to ᅥ regardless of stress
+        // (english.rs: `"AH" | "ER" => "\u{1165}"`) -- "ə" (unstressed AH0) is the
+        // same base vowel as stressed "ʌ" (AH1/AH2), which already mapped to ㅓ.
+        // "mileage" from cmudict's primary (schwa) pronunciation -- doubled 'l'
+        // (see build_training_corpus.py's double_intervocalic_l) -- now matches
+        // crates/g2pk's own documented, accepted answer for this exact word
+        // (english.rs's converts_mileage_using_cmudicts_primary_pronunciation).
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["m", "aɪ", "l", "l", "ə", "dʒ"])),
+            "마일러지"
         );
     }
 
