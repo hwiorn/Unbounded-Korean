@@ -88,6 +88,12 @@ fn diphthong_second_vowel(token: &str) -> Option<char> {
 
 fn tokens_to_units<S: AsRef<str>>(phonemes: &[S]) -> Vec<Unit> {
     let mut units = Vec::with_capacity(phonemes.len());
+    // Parallel to `units`: whether the unit at the same index came from a
+    // literal "ə" token, not merely from unit_for's merged Vowel('ㅔ') target
+    // (which "ɛ"/"e"/"ᵻ" also produce) -- see collapse_syllabic_schwa_l, which
+    // needs to tell a real schwa apart from an ordinary /ɛ/ or /e/ that just
+    // happens to render as the same jamo.
+    let mut is_schwa = Vec::with_capacity(phonemes.len());
     for token in phonemes {
         let token = token.as_ref();
         // "ɯ" is not a phoneme in its own right -- it's the training-data signal
@@ -107,11 +113,13 @@ fn tokens_to_units<S: AsRef<str>>(phonemes: &[S]) -> Vec<Unit> {
             continue;
         };
         units.push(unit);
+        is_schwa.push(token == "ə");
         if let Some(second) = diphthong_second_vowel(token) {
             units.push(Unit::Vowel(second));
+            is_schwa.push(false);
         }
     }
-    collapse_syllabic_schwa_l(units)
+    collapse_syllabic_schwa_l(units, &is_schwa)
 }
 
 /// English words ending in a syllabic consonant spelled "-Cəl" (apple, table, little)
@@ -119,10 +127,18 @@ fn tokens_to_units<S: AsRef<str>>(phonemes: &[S]) -> Vec<Unit> {
 /// the trailing /l/ merge into one "consonant + ㅡ + ㄹ" syllable instead of the schwa
 /// getting its own syllable (애플, not 애펠). Ported from hangulize-rs's
 /// `collapse_syllabic_schwa_l`.
-fn collapse_syllabic_schwa_l(units: Vec<Unit>) -> Vec<Unit> {
+///
+/// `is_schwa[i]` must be checked alongside `units[i]` -- unit_for merges "ə", "ɛ",
+/// "e", and "ᵻ" into the same Unit::Vowel('ㅔ') target, but only a literal schwa
+/// drops out this way. An ordinary /ɛ/ or /e/ before a word-final L is a real
+/// vowel that keeps its own syllable ("cell" 셀, not 스르; "Cornell" 코넬, not
+/// 콘르) -- checking only the merged jamo like the original version did collapsed
+/// those too.
+fn collapse_syllabic_schwa_l(units: Vec<Unit>, is_schwa: &[bool]) -> Vec<Unit> {
     let mut out = Vec::with_capacity(units.len());
     for (i, unit) in units.iter().copied().enumerate() {
         let syllabic_l = matches!(unit, Unit::Vowel('ㅔ'))
+            && is_schwa[i]
             && i > 0
             && i + 1 == units.len().saturating_sub(1)
             && matches!(units[i - 1], Unit::Consonant(_))
@@ -546,6 +562,17 @@ mod tests {
             phonemes_to_hangul(&tokens(&["h", "o", "k", "ɯ", "l", "l", "i"])),
             "호클리"
         );
+    }
+
+    #[test]
+    fn a_real_e_before_a_word_final_l_keeps_its_own_syllable() {
+        // "cell" 셀, "bell" 벨: unit_for merges "ə"/"ɛ"/"e" into the same
+        // Vowel('ㅔ') target, but collapse_syllabic_schwa_l must only drop a
+        // literal schwa -- these use "e" (a real vowel), not "ə", so the
+        // vowel must survive (스르/브르 was the bug: the vowel silently
+        // vanished, leaving only two consonants with nothing between them).
+        assert_eq!(phonemes_to_hangul(&tokens(&["s", "e", "l"])), "셀");
+        assert_eq!(phonemes_to_hangul(&tokens(&["b", "e", "l"])), "벨");
     }
 
     #[test]
