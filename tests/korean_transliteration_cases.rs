@@ -63,8 +63,11 @@ fn matches_ordinary_word_cases() {
 /// documents this exact same limitation and reaches the same 마일러지
 /// answer) -- neither is "wrong", they answer different questions. An acronym
 /// like "SKT" is a Korean-orthography convention (spelling out each letter's
-/// Korean name) with no equivalent in real English pronunciation, so
-/// "eng-us" has nothing to decode it from at all.
+/// Korean name) with no equivalent in real English pronunciation: "eng-us"
+/// lowercases it to "skt" before decoding (cmudict is entirely lowercase, so
+/// there's no case distinction to lose -- see eng_us_transliterate's own
+/// comment) and gives some ordinary-word-shaped phonetic guess for that
+/// string, never the letter-spelling reading.
 #[test]
 fn eng_and_eng_us_answer_different_questions_for_the_same_word() {
     assert_eq!(
@@ -75,7 +78,14 @@ fn eng_and_eng_us_answer_different_questions_for_the_same_word() {
         korean_transliteration::transliterate("eng-us", "mileage").unwrap(),
         "마일러지"
     );
-    assert!(korean_transliteration::transliterate("eng-us", "SKT").is_err());
+    assert_eq!(
+        korean_transliteration::transliterate("eng", "SKT").unwrap(),
+        "에스케이티"
+    );
+    assert_ne!(
+        korean_transliteration::transliterate("eng-us", "SKT").unwrap(),
+        "에스케이티"
+    );
 }
 
 /// A word with no entry in any Hangul-answer-derived source (hsl_eng/muik/

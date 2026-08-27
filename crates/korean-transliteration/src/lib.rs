@@ -249,10 +249,20 @@ fn decode_with_model(model: &Model, word: &str) -> Result<String> {
 /// "eng"'s own fallback for a word with no authoritative Korean-convention answer,
 /// so both get the same guarantee for any word actually in cmudict.
 fn eng_us_transliterate(word: &str) -> Result<String> {
-    if let Some(phonemes) = ENG_US_PHONEMES.get(word) {
+    // eng_us.dict (cmudict) is entirely lowercase -- 0 of its 124,911 entries
+    // contain an uppercase letter -- so an uppercase/mixed-case acronym like "MAD"
+    // matched nothing here, fell through to the live FST, and hit letters its
+    // grapheme table had never seen at all ("Symbol: 'D' not found in input
+    // symbols table"), degrading to a near-arbitrary guess ("마드", not even
+    // matching lowercase "mad"'s own correct "매드"). eng-us has no case-based
+    // distinction to lose by lowercasing first, unlike eng.dict (where korean_go.tsv
+    // deliberately uses case to distinguish a letter-spelled acronym from the
+    // ordinary word, e.g. "MAD" -> 엠에이디 vs "mad" -> 매드).
+    let lower = word.to_lowercase();
+    if let Some(phonemes) = ENG_US_PHONEMES.get(lower.as_str()) {
         return Ok(p2g::phonemes_to_hangul(phonemes));
     }
-    decode_with_model(&ENG_US_MODEL, word)
+    decode_with_model(&ENG_US_MODEL, &lower)
 }
 
 pub fn transliterate(lang: &str, word: &str) -> Result<String> {
