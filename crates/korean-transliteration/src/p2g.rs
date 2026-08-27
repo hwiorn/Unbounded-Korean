@@ -111,37 +111,7 @@ fn tokens_to_units<S: AsRef<str>>(phonemes: &[S]) -> Vec<Unit> {
             units.push(Unit::Vowel(second));
         }
     }
-    let units = collapse_geminate_consonants(units);
     collapse_syllabic_schwa_l(units)
-}
-
-/// A decoder can emit the same consonant phoneme twice in a row where English
-/// orthography has a doubled letter but only one actual sound (observed with an
-/// earlier, less accurate decoder, for non-liquid consonants). Collapsing adjacent
-/// identical consonants avoids a spurious extra syllable from that artifact.
-///
-/// ㄹ is exempt: unlike other consonants, a genuinely doubled ㄹ from
-/// Korean-answer-derived training data is phonologically meaningful, not a decoder
-/// artifact -- Korean loanword orthography productively doubles an intervocalic
-/// liquid that came from the source word's own coda+onset pair ("mileage" 마일리지
-/// has a real 일-coda ㄹ next to 리's onset ㄹ). Collapsing that away and then
-/// re-inflating it at render time (the old approach) couldn't tell a genuinely
-/// doubled ㄹ apart from a genuinely single one, so it doubled every intervocalic
-/// ㄹ unconditionally -- wrong for a single source /l/ or /r/ ("neuron" 뉴런, not
-/// 뉼런). Leaving real ㄹ doubles intact here lets the ordinary coda-carry logic in
-/// `phonemes_to_hangul` render exactly as many ㄹ syllables as the data has.
-fn collapse_geminate_consonants(units: Vec<Unit>) -> Vec<Unit> {
-    let mut out: Vec<Unit> = Vec::with_capacity(units.len());
-    for unit in units {
-        let is_repeat = matches!(
-            (out.last(), unit),
-            (Some(Unit::Consonant(a)), Unit::Consonant(b)) if *a == b && *a != 'ㄹ'
-        );
-        if !is_repeat {
-            out.push(unit);
-        }
-    }
-    out
 }
 
 /// English words ending in a syllabic consonant spelled "-Cəl" (apple, table, little)
@@ -169,12 +139,17 @@ fn collapse_syllabic_schwa_l(units: Vec<Unit>) -> Vec<Unit> {
 fn resolve_onset_vowel(onset: OnsetCandidate, vowel: char) -> (char, char) {
     match (onset, vowel) {
         (OnsetCandidate::Glide('W'), 'ㅏ') => ('ㅇ', 'ㅘ'),
-        (OnsetCandidate::Glide('W'), 'ㅐ' | 'ㅔ') => ('ㅇ', 'ㅞ'),
+        (OnsetCandidate::Glide('W'), 'ㅐ') => ('ㅇ', 'ㅙ'),
+        (OnsetCandidate::Glide('W'), 'ㅔ') => ('ㅇ', 'ㅞ'),
         (OnsetCandidate::Glide('W'), 'ㅓ') => ('ㅇ', 'ㅝ'),
         (OnsetCandidate::Glide('W'), 'ㅣ') => ('ㅇ', 'ㅟ'),
         (OnsetCandidate::Glide('W'), 'ㅜ') => ('ㅇ', 'ㅜ'),
         (OnsetCandidate::Glide('Y'), 'ㅏ') => ('ㅇ', 'ㅑ'),
-        (OnsetCandidate::Glide('Y'), 'ㅓ' | 'ㅔ') => ('ㅇ', 'ㅖ'),
+        // ㅓ and ㅔ produce DIFFERENT compounds (여 vs 예) -- previously merged
+        // into 'ㅖ' for both, which mis-rendered every Y+ㅓ syllable ("passion"
+        // -> 션 needs 여, not 예).
+        (OnsetCandidate::Glide('Y'), 'ㅓ') => ('ㅇ', 'ㅕ'),
+        (OnsetCandidate::Glide('Y'), 'ㅔ') => ('ㅇ', 'ㅖ'),
         (OnsetCandidate::Glide('Y'), 'ㅗ') => ('ㅇ', 'ㅛ'),
         (OnsetCandidate::Glide('Y'), 'ㅜ') => ('ㅇ', 'ㅠ'),
         (OnsetCandidate::Glide('Y'), 'ㅣ') => ('ㅇ', 'ㅣ'),
@@ -256,24 +231,46 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                     out.push_str(&render_stray_consonants(&pending));
                     pending.clear();
                 }
-                // A neutral syllable renders immediately with no coda slot of its
-                // own, but a genuinely doubled ㄹ right after it (coda + onset
-                // from the Hangul answer, e.g. "Claiborne" 클레이번's 클-coda +
-                // 레-onset) still needs somewhere for the first ㄹ to land. Give
-                // it to THIS syllable as a coda instead of leaving it for the
-                // ordinary onset-pop mechanism, which would strand it as its own
-                // stray "르" syllable once the second ㄹ claims the next vowel's
-                // onset (크르레 instead of 클레).
-                if matches!(units.get(i + 1), Some(Unit::Consonant('ㄹ')))
-                    && matches!(units.get(i + 2), Some(Unit::Consonant('ㄹ')))
-                    && matches!(units.get(i + 3), Some(Unit::Vowel(_)))
-                {
-                    out.push(compose_syllable(c, 'ㅡ', Some('ㄹ')));
-                    i += 2;
-                } else {
-                    out.push(compose_syllable(c, 'ㅡ', None));
-                    i += 1;
+                // A neutral syllable renders immediately, but consonants right
+                // after it still need somewhere to land: a trailing cluster
+                // before another vowel gives its leading (coda-eligible) member
+                // to THIS syllable as a coda ("Claiborne" 클레이번's 클-coda +
+                // 레-onset, from a genuinely doubled ㄹ), and a trailing cluster
+                // at the word's end (no vowel following) does the same via
+                // split_final_cluster ("little" 리틀, not 리트르). A single
+                // consonant before another vowel is left alone (it becomes that
+                // vowel's onset instead), matching the analogous rule for a
+                // real vowel below.
+                let mut j = i + 1;
+                let mut after = Vec::new();
+                while j < units.len() {
+                    if let Unit::Consonant(cc) = units[j] {
+                        after.push(cc);
+                        j += 1;
+                    } else {
+                        break;
+                    }
                 }
+                let next_is_vowel = j < units.len() && matches!(units[j], Unit::Vowel(_));
+                if next_is_vowel && after.len() > 1 {
+                    if let (Some(tail), rest) = split_final_cluster(&after) {
+                        out.push(compose_syllable(c, 'ㅡ', Some(tail)));
+                        pending = rest.to_vec();
+                        i = j;
+                        continue;
+                    }
+                }
+                if !next_is_vowel && !after.is_empty() {
+                    let (tail, rest) = split_final_cluster(&after);
+                    out.push(compose_syllable(c, 'ㅡ', tail));
+                    if !rest.is_empty() {
+                        out.push_str(&render_stray_consonants(rest));
+                    }
+                    i = j;
+                    continue;
+                }
+                out.push(compose_syllable(c, 'ㅡ', None));
+                i += 1;
             }
             Unit::Vowel(vowel) => {
                 let onset_char = pending.pop();
@@ -313,6 +310,31 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                         break;
                     }
                 }
+                // A consonant immediately followed by a 'j' (Y) glide isn't a
+                // coda candidate at all -- Korean's own compound vowels
+                // ㅑㅕㅛㅠㅖㅒ decompose into this exact "j" + base-vowel shape
+                // (see korean_phonemizer's medial_to_ipa), so this consonant is
+                // really the onset of a SAME-syllable palatalized vowel
+                // ("passion" 패션's `s` before `j`+ʌ forming 션, not an `s`
+                // coda plus a stray "예"/"야" syllable from the orphaned
+                // glide+vowel; "Cugnot" 퀴뇨's `n` before `j`+o forming 뇨).
+                // Un-consume it so the ordinary Consonant/Glide/Vowel handling
+                // above picks it up fresh, the same path "new"/"queen" already
+                // use to combine a plain consonant with a following glide.
+                //
+                // A 'w' (W) glide is deliberately NOT included here: unlike
+                // 'j', a preceding consonant before "w" is genuinely ambiguous
+                // between belonging to a same-syllable onset-glide cluster and
+                // being an ordinary coda of the syllable before an unrelated
+                // w-initial syllable ("Olwen" 올웬's `l` really is 올's coda,
+                // not part of a "lw" onset -- there's no reliable signal in a
+                // flat phoneme stream to tell the two apart, and 'w' cases like
+                // this are common enough among the hsl-derived languages that
+                // guessing "combine" by default would trade a real regression
+                // for the 'j' pattern's more common gain).
+                if matches!(units.get(j), Some(Unit::Glide('Y'))) && after.pop().is_some() {
+                    j -= 1;
+                }
                 let next_is_vowel = j < units.len() && matches!(units[j], Unit::Vowel(_));
 
                 if next_is_vowel {
@@ -341,9 +363,8 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                         // Either a single consonant (never gets a coda here --
                         // it becomes only the next syllable's onset, since a
                         // source /l/ or /r/ that was never doubled must not be
-                        // forced into one: "neuron" 뉴런, not 뉼런; see
-                        // collapse_geminate_consonants) or a cluster whose
-                        // leading consonant isn't coda-eligible at all.
+                        // forced into one: "neuron" 뉴런, not 뉼런) or a cluster
+                        // whose leading consonant isn't coda-eligible at all.
                         out.push(compose_syllable(onset, vowel, None));
                         pending = after;
                     }
@@ -395,8 +416,9 @@ mod tests {
         // "hello" 헬로: this is a genuine doubled ㄹ (헬's coda + 로's onset), the
         // same case reconstructs_explicit_double_l_... below covers, not actually
         // a decoder artifact in this pipeline's Hangul-answer-derived training
-        // data -- kept as a regression guard for the ㄹ-exclusion in
-        // collapse_geminate_consonants.
+        // data -- kept as a regression guard now that genuinely doubled
+        // consonants are never collapsed at all (see
+        // reconstructs_a_genuine_double_consonant_that_is_not_a_liquid below).
         assert_eq!(
             phonemes_to_hangul(&tokens(&["h", "ɛ", "l", "l", "oʊ"])),
             "헬로"
@@ -420,11 +442,9 @@ mod tests {
     fn reconstructs_explicit_double_l_from_korean_answer_derived_training_data() {
         // korean_go_ipa.tsv derives phonemes from the real Hangul answer, so an
         // intervocalic /l/ written across two syllables (마일리지) comes through as
-        // two adjacent 'l' tokens, not the single phoneme collapse_geminate_consonants
-        // expects from a genuine English word. Confirms the existing pipeline already
-        // handles this: collapse reduces it to one 'l', and the onset/vowel loop's own
-        // ㄹㄹ-doubling (for an intervocalic L, per 외래어 표기법 6항 rule 2) regenerates
-        // the second syllable from that single L, landing on the same answer either way.
+        // two adjacent 'l' tokens -- both real, both preserved (see
+        // a_leading_consonant_in_a_cluster_becomes_a_coda_before_the_next_vowel):
+        // the first becomes 일's coda, the second becomes 리's onset.
         assert_eq!(
             phonemes_to_hangul(&tokens(&["m", "a", "i", "l", "l", "i", "dʒ", "i"])),
             "마일리지"
@@ -525,6 +545,67 @@ mod tests {
         assert_eq!(
             phonemes_to_hangul(&tokens(&["h", "o", "k", "ɯ", "l", "l", "i"])),
             "호클리"
+        );
+    }
+
+    #[test]
+    fn reconstructs_a_genuine_double_consonant_that_is_not_a_liquid() {
+        // "ammeter" 암미터: a genuine double /m/ (am-coda + me-onset) must
+        // survive just like a doubled ㄹ does -- collapsing any repeated
+        // consonant used to also erase real non-liquid doubles (아미터).
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["a", "m", "m", "i", "t", "ʌ"])),
+            "암미터"
+        );
+    }
+
+    #[test]
+    fn y_glide_plus_eo_produces_yeo_not_ye() {
+        // resolve_onset_vowel used to merge 'ㅓ' and 'ㅔ' into the same
+        // compound 'ㅖ' (ye) for a Y glide onset; they're different vowels --
+        // 'ㅓ' must produce 'ㅕ' (yeo) instead.
+        assert_eq!(phonemes_to_hangul(&tokens(&["j", "ʌ"])), "여");
+    }
+
+    #[test]
+    fn a_consonant_before_a_w_glide_still_becomes_the_earlier_syllables_coda() {
+        // "Olwen" 올웬: unlike the 'j'-glide case below, a consonant right
+        // before a 'w' glide keeps its old coda-of-the-preceding-syllable
+        // behavior -- `l` becomes 올's coda, and `w`+`e` starts a fresh
+        // syllable (웬) with no real onset consonant.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["o", "l", "w", "e", "n"])),
+            "올웬"
+        );
+    }
+
+    #[test]
+    fn a_consonant_before_a_glide_still_forms_a_coda_syllable_correctly() {
+        // "passion" 패션: the "s j ʌ n" tail is a consonant directly before a
+        // glide, exactly like "new"'s "n j u" -- but here it follows a vowel
+        // that already looked ahead for a coda cluster, so `s` used to get
+        // swallowed into that lookahead and treated as 패's coda, stranding
+        // the orphaned "j ʌ n" as its own onset-less syllable (팻옌 instead of
+        // 패션). The lookahead must skip a consonant immediately followed by
+        // a glide, leaving it to combine with the glide as this new
+        // syllable's onset instead.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["p", "æ", "s", "j", "ʌ", "n"])),
+            "패션"
+        );
+    }
+
+    #[test]
+    fn a_neutral_syllable_takes_a_single_trailing_consonant_as_its_own_coda() {
+        // "little" 리틀: the neutral-syllable T (틀's own ㅡ nucleus) is
+        // followed by exactly one more consonant at the word's end -- it must
+        // become THIS syllable's coda (틀), not a separate stray syllable
+        // (리트르). The earlier fix only handled a trailing *pair* of ㄹ's
+        // before another vowel; this generalizes it to any trailing cluster,
+        // including a single consonant at the word's end.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&["l", "i", "t", "ɯ", "l"])),
+            "리틀"
         );
     }
 
