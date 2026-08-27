@@ -1,5 +1,6 @@
 mod hangul;
 pub mod p2g;
+pub mod reverse;
 
 use once_cell::sync::Lazy;
 use pinyin::ToPinyin;

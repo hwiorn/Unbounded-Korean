@@ -330,6 +330,15 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
                         break;
                     }
                 }
+                // Same "consonant immediately before a 'j' (Y) glide isn't a coda
+                // candidate" un-consume as the Vowel branch below (see its own
+                // comment) -- without this, a NeutralSyllable directly followed by
+                // e.g. "s j e" ("Gottsched" 고트셰트's 셰) stranded the 's' as its
+                // own bare 스 syllable instead of leaving it for 셰 to claim as its
+                // true onset (고트스예트).
+                if matches!(units.get(j), Some(Unit::Glide('Y'))) && after.pop().is_some() {
+                    j -= 1;
+                }
                 let next_is_vowel = j < units.len() && matches!(units[j], Unit::Vowel(_));
                 if next_is_vowel && after.len() > 1 {
                     if let (Some(tail), rest) = split_final_cluster(&after) {
@@ -682,6 +691,23 @@ mod tests {
         assert_eq!(
             phonemes_to_hangul(&tokens(&["p", "æ", "s", "j", "ʌ", "n"])),
             "패션"
+        );
+    }
+
+    #[test]
+    fn a_neutral_syllable_directly_before_a_glide_syllable_does_not_strand_its_onset() {
+        // "Gottsched" 고트셰트: the neutral-syllable T (트's own ㅡ nucleus) is
+        // directly followed by "s j e t ɯ" (셰트) -- the trailing 's' must be left
+        // for 셰 to claim as its true onset, the same "consonant immediately
+        // before a Y glide isn't a coda candidate" rule the Vowel branch already
+        // applies (see a_consonant_before_a_glide_still_forms_a_coda_syllable_
+        // correctly below). Previously stranded 's' as its own bare 스 syllable
+        // (고트스예트) since NeutralSyllable's lookahead didn't know about glides.
+        assert_eq!(
+            phonemes_to_hangul(&tokens(&[
+                "ɡ", "o", "t", "ɯ", "s", "j", "e", "t", "ɯ"
+            ])),
+            "고트셰트"
         );
     }
 

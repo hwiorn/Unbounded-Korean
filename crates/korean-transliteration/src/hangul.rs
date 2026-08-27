@@ -33,9 +33,37 @@ pub fn compose_syllable(lead: char, vowel: char, tail: Option<char>) -> char {
     char::from_u32(code as u32).unwrap_or(lead)
 }
 
+/// Decomposes one Hangul syllable block into its lead, vowel, and optional tail --
+/// the inverse of `compose_syllable`. Returns `None` for a `char` outside the
+/// precomposed Hangul Syllables block (U+AC00..=U+D7A3), e.g. plain ASCII or a jamo
+/// that isn't part of a composed syllable.
+pub fn decompose_syllable(ch: char) -> Option<(char, char, Option<char>)> {
+    let code = ch as u32;
+    if !(0xAC00..=0xD7A3).contains(&code) {
+        return None;
+    }
+    let idx = code - 0xAC00;
+    let lead = LEADS[(idx / (21 * 28)) as usize];
+    let vowel = VOWELS[((idx % (21 * 28)) / 28) as usize];
+    let tail_idx = (idx % 28) as usize;
+    let tail = if tail_idx == 0 {
+        None
+    } else {
+        Some(TAILS[tail_idx])
+    };
+    Some((lead, vowel, tail))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decomposes_a_syllable_into_lead_vowel_and_tail() {
+        assert_eq!(decompose_syllable('헤'), Some(('ㅎ', 'ㅔ', None)));
+        assert_eq!(decompose_syllable('영'), Some(('ㅇ', 'ㅕ', Some('ㅇ'))));
+        assert_eq!(decompose_syllable('x'), None);
+    }
 
     #[test]
     fn composes_simple_syllable_without_tail() {
