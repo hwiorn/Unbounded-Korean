@@ -116,7 +116,13 @@ fn tail_phoneme(tail: char) -> Option<&'static str> {
 /// should skip that word rather than train on a lossy guess.
 pub fn hangul_to_phonemes(hangul: &str) -> Option<Vec<String>> {
     let mut tokens = Vec::new();
-    for ch in hangul.chars() {
+    for (i, ch) in hangul.chars().enumerate() {
+        if i > 0 {
+            // A real, standard IPA syllable-boundary mark -- see p2g's own
+            // `Unit::Boundary` doc comment for why this needs to be an explicit
+            // token rather than left implicit.
+            tokens.push(".".to_string());
+        }
         let (lead, vowel, tail) = crate::hangul::decompose_syllable(ch)?;
         let lead_ph = lead_phoneme(lead);
         if lead != 'ㅇ' && lead_ph.is_none() {

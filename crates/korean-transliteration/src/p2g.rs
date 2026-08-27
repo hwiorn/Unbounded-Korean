@@ -27,6 +27,23 @@ enum Unit {
     /// renders immediately as its own syllable instead of queuing in `pending` for
     /// the following vowel to claim as an onset.
     NeutralSyllable(char),
+    /// A real, standard IPA syllable-boundary mark (the "." in e.g. Wiktionary's
+    /// /ˈdʌb.(ə)l.juː/ for "double-u") -- `reverse::hangul_to_phonemes` emits one
+    /// between every pair of Hangul syllables it encodes. Without it, a plain
+    /// phoneme stream carries no signal at all for whether a consonant right
+    /// before a vowel/glide belongs to the syllable before it or the one after --
+    /// most English words want the latter ("neuron" 뉴런, "new" 뉴), which is why
+    /// that's every other branch's default, but a written answer can deliberately
+    /// want the former (the "W" letter-name "더블유"'s own ㄹ must stay put, not
+    /// flow into "유"; "MAD" spelled out as letters, "엠에이디", needs its ㅁ to
+    /// stay in "엠", not flow into "에"). `Boundary` doesn't need any dedicated
+    /// handling in the lookahead loops below: it simply isn't a `Consonant` or a
+    /// `Vowel`, so every "collect trailing consonants" / "is a vowel coming next"
+    /// check already stops at it for free, exactly as if it were the end of the
+    /// word -- the one place it needs an explicit match arm is
+    /// `phonemes_to_hangul`'s own top-level dispatch, which must advance past it
+    /// without emitting anything.
+    Boundary,
 }
 
 fn unit_for(token: &str) -> Option<Unit> {
@@ -132,6 +149,11 @@ fn tokens_to_units<S: AsRef<str>>(phonemes: &[S]) -> Vec<Unit> {
             if let Some(Unit::Consonant(c)) = units.last().copied() {
                 *units.last_mut().unwrap() = Unit::NeutralSyllable(c);
             }
+            continue;
+        }
+        if token == "." {
+            units.push(Unit::Boundary);
+            is_schwa.push(false);
             continue;
         }
         let Some(unit) = unit_for(token) else {
@@ -297,6 +319,13 @@ pub fn phonemes_to_hangul<S: AsRef<str>>(phonemes: &[S]) -> String {
     let mut i = 0;
     while i < units.len() {
         match units[i] {
+            Unit::Boundary => {
+                // Every lookahead below already stops here on its own (see this
+                // variant's own doc comment) -- `pending` is guaranteed already
+                // flushed by the time a `Boundary` is reached as a top-level
+                // unit, so there's nothing to do but step past it.
+                i += 1;
+            }
             Unit::Consonant(c) => {
                 pending.push(c);
                 i += 1;
@@ -605,14 +634,18 @@ mod tests {
 
     #[test]
     fn a_single_intervocalic_liquid_is_not_forced_into_a_double_coda() {
-        // "neuron" (뉴런): the trained phonemes have exactly one 'l' token (Korean
-        // 뉴런 has no ㄹ coda, only 런's onset), but the old "after == ['ㄹ']" branch
+        // "neuron" is really /ˈn(j)ʊrɒn/ -- an American /r/, not /l/ -- so this
+        // uses the "r" token (Consonant('R')'s own reclaim-before-a-vowel path,
+        // exercised separately below by an_r_immediately_before_a_vowel_is_
+        // still_a_real_onset) rather than a plain "l". Korean 뉴런 has no ㄹ coda
+        // at all, only 런's onset, but the old "after == ['ㄹ']" branch
         // unconditionally doubled ANY single intervocalic liquid into a coda +
-        // matching next onset, which is only correct for a liquid that really was
-        // doubled in the source (an English intervocalic /l/, e.g. "mileage"
-        // 마일리지 below) -- not for a single /l/ or /r/ ("neuron" 뉼런 was wrong).
+        // matching next onset, which is only correct for a liquid that really
+        // was doubled in the source (an English intervocalic /l/, e.g. "mileage"
+        // 마일리지 below) -- not for a single, undoubled /l/ or /r/ ("neuron"
+        // 뉼런 was wrong).
         assert_eq!(
-            phonemes_to_hangul(&tokens(&["n", "j", "u", "l", "ʌ", "n"])),
+            phonemes_to_hangul(&tokens(&["n", "j", "u", "r", "ʌ", "n"])),
             "뉴런"
         );
     }
