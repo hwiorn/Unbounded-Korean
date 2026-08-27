@@ -8,18 +8,20 @@
 # session's plan.
 #
 # Usage: train_phonetisaurus.sh <lang> [--dry-run]
-# TRAIN_NGRAM_ORDER=<n> overrides the joint n-gram order. Default is 6, not the 8 the
-# high-level `phonetisaurus train` CLI hardcodes: an order 4/5/6/8 comparison on this
-# corpus (2026-08-26) found order 6 tracks order 8's output almost exactly (a handful
-# of already-imperfect longer words differ, none clearly worse) while cutting the
-# shipped model from 37.8MB to 21.3MB gzipped -- order 8's extra context mostly wasn't
-# earning its size on this vocabulary. See docs/plans/2026-08-26-
-# korean-transliteration-plan.md for the full comparison.
+# TRAIN_NGRAM_ORDER=<n> overrides the joint n-gram order. Default is 8, matching the
+# high-level `phonetisaurus train` CLI's own default. An order 4/5/6/8 comparison on
+# eng.dict (2026-08-26, before this pipeline's P2G rendering bugs were fixed) found
+# order 6 tracked order 8 closely enough to prefer the smaller model (21.3MB vs
+# 37.8MB gzipped). Re-measured after fixing those P2G bugs (2026-08-27): with correct
+# rendering, order 8 recovers more of the model's own correct training data at decode
+# time than order 6 does (korean_go.tsv benchmark 78.6% -> 80.3%), so the extra size
+# is worth it again for English's large corpus. See docs/plans/2026-08-26-
+# korean-transliteration-plan.md for the original comparison.
 set -euo pipefail
 
 REMOTE_HOST="${TRAIN_REMOTE_HOST:-gglee@rares01.rapeech.intra}"
 REMOTE_REPO_URL="${TRAIN_REMOTE_REPO_URL:-git@github.com:hwiorn/Unbounded-Korean.git}"
-NGRAM_ORDER="${TRAIN_NGRAM_ORDER:-6}"
+NGRAM_ORDER="${TRAIN_NGRAM_ORDER:-8}"
 LANG_CODE="${1:?usage: train_phonetisaurus.sh <lang> [--dry-run]}"
 MODE="${2:-}"
 
