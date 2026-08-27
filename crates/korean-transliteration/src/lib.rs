@@ -22,8 +22,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// trained the same way (see scripts/train_phonetisaurus.sh): the training corpus is
 /// always (source word, Korean-phoneme-space tokens) pairs, regardless of source
 /// language, since the phonemes come from running each word's known-correct Hangul
-/// answer through korean_phonemizer (see examples/hangul_answer_to_ipa_corpus.rs) --
-/// so loading and decoding a model works identically for every language.
+/// answer through reverse::hangul_to_phonemes (see
+/// examples/hangul_answer_to_ipa_corpus.rs) -- so loading and decoding a model works
+/// identically for every language.
 macro_rules! lang_model {
     ($name:ident, $path:literal) => {
         static $name: Lazy<Model> = Lazy::new(|| {
@@ -191,6 +192,21 @@ static ENG_AUTHORITATIVE_PHONEMES: Lazy<HashMap<&'static str, Vec<&'static str>>
         .collect()
     });
 
+/// eng-us's analogue of `ENG_AUTHORITATIVE_PHONEMES`: every word literally in
+/// eng_us.dict (cmudict) is a case where the "correct" answer is already known
+/// exactly -- decoding it live is the same pure-downside gamble it was for "eng"
+/// (measured at 98.24% decoder fidelity to its own training data otherwise, e.g.
+/// "wier" trained on "w ɪ ɹ" -> 위 but decoded to 와이어). Words NOT in cmudict at
+/// all still need the live FST's actual generalization ability, which this
+/// doesn't touch.
+static ENG_US_PHONEMES: Lazy<HashMap<&'static str, Vec<&'static str>>> = Lazy::new(|| {
+    include_str!("../../../data/corpus/eng_us.dict")
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(word, phonemes)| (word, phonemes.split(' ').collect()))
+        .collect()
+});
+
 /// Converts a logographic word into the alphabetic-adjacent proxy spelling its G2P
 /// model was trained on (see `dictionary_for`'s doc comment) -- concatenated plain
 /// pinyin for Chinese, or a kana reading (family/given name space stripped, matching
@@ -228,6 +244,17 @@ fn decode_with_model(model: &Model, word: &str) -> Result<String> {
     Ok(p2g::phonemes_to_hangul(&phonemes))
 }
 
+/// "eng-us"'s own exact-dictionary-first, decode-as-fallback path (see
+/// `ENG_US_PHONEMES`'s doc comment) -- shared between "eng-us"/"en-us" requests and
+/// "eng"'s own fallback for a word with no authoritative Korean-convention answer,
+/// so both get the same guarantee for any word actually in cmudict.
+fn eng_us_transliterate(word: &str) -> Result<String> {
+    if let Some(phonemes) = ENG_US_PHONEMES.get(word) {
+        return Ok(p2g::phonemes_to_hangul(phonemes));
+    }
+    decode_with_model(&ENG_US_MODEL, word)
+}
+
 pub fn transliterate(lang: &str, word: &str) -> Result<String> {
     if let Some(hangul) = dictionary_for(lang).and_then(|dict| dict.get(word)) {
         return Ok((*hangul).to_string());
@@ -236,9 +263,12 @@ pub fn transliterate(lang: &str, word: &str) -> Result<String> {
         if let Some(phonemes) = ENG_AUTHORITATIVE_PHONEMES.get(word) {
             return Ok(p2g::phonemes_to_hangul(phonemes));
         }
-        if let Ok(hangul) = decode_with_model(&ENG_US_MODEL, word) {
+        if let Ok(hangul) = eng_us_transliterate(word) {
             return Ok(hangul);
         }
+    }
+    if lang == "eng-us" || lang == "en-us" {
+        return eng_us_transliterate(word);
     }
     let model = model_for(lang).ok_or_else(|| Error::ModelNotFound(lang.to_string()))?;
     let romanized = romanize(lang, word);
