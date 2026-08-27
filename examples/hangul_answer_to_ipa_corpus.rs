@@ -1,81 +1,29 @@
 // Converts a (word, Hangul-answer) TSV — e.g. data/corpus/hsl_seed.tsv (this
 // session's eng.hsl fix cases: SKT, NAVER, KT, AI) or data/corpus/korean_go.tsv
 // (muik/transliteration's 31,898 government-sourced English->Korean pairs) — into
-// (word, simplified-IPA-phonemes) training pairs, by running the Hangul answer
-// through korean_phonemizer's real Korean G2P and keeping only the characters that
-// are recognized English phonemes in korean_transliteration's P2G table.
+// (word, phonemes) training pairs, by running the Hangul answer through
+// korean_transliteration::reverse's literal, context-free inverse of p2g's own
+// tables and verifying it round-trips exactly back through p2g::phonemes_to_hangul
+// before accepting it.
 //
-// This reuses the REAL, human-verified answer instead of guessing English
-// pronunciation (misaki) or hand-authoring phoneme tables (both error-prone, as this
-// session found) — the G2P(Phonetisaurus) -> IPA -> P2G pipeline stays unchanged;
-// this only supplies better training data for it, matching the design requirement
-// that other source languages could reuse the identical technique later since
-// korean_phonemizer's role here is Hangul -> phonemes, not English-specific.
+// This used to go through korean_phonemizer's real Korean G2P instead. That's the
+// wrong tool for this job: it applies genuine Korean phonology (lateralization,
+// palatalization, tensification, position-dependent voicing) that changes what the
+// WRITTEN answer says to match how a Korean speaker would actually pronounce it
+// ("월넛" -> "월럳" via ㄹ+ㄴ lateralization) -- which p2g's forward direction, having
+// no Korean phonology of its own, can never undo. reverse::hangul_to_phonemes is a
+// genuine mathematical inverse of p2g's own tables instead, so it can't drift out of
+// sync with them the way a separately-maintained real-pronunciation engine can.
 //
-// Usage: hangul_answer_to_ipa_corpus <input.tsv> <output.tsv> [--word-col N] [--hangul-col N]
+// Usage: hangul_answer_to_ipa_corpus <input.tsv> <filtered-output.tsv> <raw-output.tsv>
 //
-// Input format: tab-separated, at least two columns; by default column 0 is the
-// word and the LAST column is the Hangul answer (matches both hsl_seed.tsv's
-// lang\tword\thangul and korean_go.tsv's word\thangul).
+// Input format: tab-separated, at least two columns; column 0 is the word and the
+// LAST column is the Hangul answer (matches both hsl_seed.tsv's lang\tword\thangul
+// and korean_go.tsv's word\thangul).
 
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
-
-// Matches korean_transliteration::p2g's recognized single-character phoneme set, plus
-// 'ɯ' -- not a phoneme itself, but P2G's signal that the consonant right before it
-// takes ㅡ as its own syllable nucleus (see p2g.rs's Unit::NeutralSyllable) rather than
-// attaching to whatever vowel comes next (needed for e.g. "USA"'s middle S: 유에스에이,
-// not 유에세이). Everything else (aspiration ʰ, tie-bars, palatalization ɕ/ʑ handled
-// separately by tokenize_ipa) is dropped — P2G doesn't need it, and it would only
-// teach the model to reproduce Korean-phonology noise instead of the English pattern.
-fn is_recognized_phoneme_char(c: char) -> bool {
-    matches!(
-        c,
-        'æ' | 'ɛ'
-            | 'ə'
-            | 'e'
-            | 'ᵻ'
-            | 'ɜ'
-            | 'ʌ'
-            | 'ɔ'
-            | 'ɚ'
-            | 'ɝ'
-            | 'ɑ'
-            | 'a'
-            | 'i'
-            | 'ɪ'
-            | 'u'
-            | 'ʊ'
-            | 'o'
-            | 'ɯ'
-            | 'ɡ'
-            | 'g'
-            | 'k'
-            | 't'
-            | 'd'
-            | 'p'
-            | 'b'
-            | 'f'
-            | 'v'
-            | 's'
-            | 'θ'
-            | 'z'
-            | 'ð'
-            | 'ʃ'
-            | 'ʒ'
-            | 'h'
-            | 'm'
-            | 'n'
-            | 'ŋ'
-            | 'l'
-            | 'ɫ'
-            | 'r'
-            | 'ɹ'
-            | 'w'
-            | 'j'
-    )
-}
 
 fn is_clean_word(word: &str) -> bool {
     // Unicode-aware, not ASCII-only: German (Königen, Fräulein), and every other
@@ -83,94 +31,25 @@ fn is_clean_word(word: &str) -> bool {
     !word.is_empty() && word.chars().all(|c| c.is_alphabetic() || c == '\'')
 }
 
-/// Korean ㅈ/ㅊ/ㅉ are alveolo-palatal affricates in korean_phonemizer's IPA output --
-/// a tie-barred sequence built from a stop plus U+0255 (ɕ, the alveolo-palatal
-/// fricative), not the plain postalveolar ʃ/ʒ this module's single-character filter
-/// already recognizes. Left to plain per-character filtering, ɕ (and the combining
-/// tie bar/tense mark) are silently dropped, leaving only the bare stop -- so ㅈ/ㅊ
-/// are mis-tokenized as plain T/D and corrupt any word containing this extremely
-/// common Korean consonant pair (measured at ~20% of korean_go/muik entries). Ordered
-/// longest-pattern-first: "t\u{361}\u{255}" is a prefix of "t\u{361}\u{255}\u{2b0}", so the
-/// aspirated form must match before the plain one.
-const AFFRICATE_PATTERNS: &[(&str, &str)] = &[
-    ("t\u{348}\u{361}\u{255}", "dʒ"), // ㅉ (tense) -- P2G has no tense-consonant target
-    ("t\u{361}\u{255}\u{2b0}", "tʃ"), // ㅊ (aspirated)
-    ("t\u{361}\u{255}", "dʒ"),        // ㅈ (plain, voiceless allophone)
-    ("d\u{361}\u{255}", "dʒ"),        // ㅈ (plain, voiced intervocalic allophone)
-];
-
-/// Tokenizes `ipa` into the phoneme units `korean-transliteration`'s P2G table
-/// recognizes: an affricate pattern becomes one two-character token ("dʒ"/"tʃ"), and
-/// every other recognized character becomes its own one-character token. Anything not
-/// recognized (aspiration, tense marks, the coda filler vowel ɯ, tie bars) is dropped.
-fn tokenize_ipa(ipa: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut rest = ipa;
-    'outer: while !rest.is_empty() {
-        for (pattern, token) in AFFRICATE_PATTERNS {
-            if let Some(stripped) = rest.strip_prefix(pattern) {
-                tokens.push(token.to_string());
-                rest = stripped;
-                continue 'outer;
-            }
-        }
-        let mut chars = rest.chars();
-        let c = chars.next().expect("rest is non-empty");
-        if is_recognized_phoneme_char(c) {
-            // korean_phonemizer's medial_to_ipa follows traditional Korean IPA (ㅐ
-            // is "ɛ", ㅔ is "e"), but korean-transliteration's P2G table follows the
-            // English-IPA convention this corpus trains the model to decode
-            // (CMUdict/misaki: "ɛ" is the vowel in "bed" -> ㅔ, "æ" is the vowel in
-            // "cat" -> ㅐ). korean_phonemizer never emits "æ" itself, so remapping
-            // its "ɛ" here is unambiguous -- without it, every Hangul-derived ㅐ
-            // (e.g. "bank" 뱅크) trained the model to round-trip back as ㅔ instead.
-            tokens.push(if c == 'ɛ' { "æ".to_string() } else { c.to_string() });
-        }
-        rest = chars.as_str();
-    }
-    tokens
-}
-
-/// Korean's plain ㅂ/ㄷ/ㄱ are phonetically realized as voiceless [p]/[t]/[k]
-/// word-initially (a real, correctly-modeled fact about Korean phonetics --
-/// korean_phonemizer's `is_voicing_context` only voices a lenis stop after a vowel or
-/// sonorant coda, which a word's first syllable never has). That's the right acoustic
-/// answer for Korean pronunciation, but it destroys the ㅂ-vs-ㅍ/ㄷ-vs-ㅌ/ㄱ-vs-ㅋ
-/// distinction this derivation needs to recover which English letter a word-initial
-/// Hangul syllable stands for ("BBC" -> 비비시 was training on "p i b i s i", losing B
-/// entirely). The Hangul spelling itself is unambiguous -- ㅂ always means B, never P
-/// -- so this corrects just the first token using the orthographic lead consonant.
-fn word_initial_lenis_voicing_correction(hangul: &str) -> Option<(&'static str, &'static str)> {
-    let (lead, _, _) = g2pk::hangul::decompose_char(hangul.chars().next()?)?;
-    match lead {
-        'ᄇ' => Some(("p", "b")),
-        'ᄃ' => Some(("t", "d")),
-        'ᄀ' => Some(("k", "ɡ")),
-        _ => None,
-    }
-}
-
-/// Returns (filtered-for-Phonetisaurus-training, raw-unfiltered-korean-phonemizer-ipa).
-/// The raw form is preserved as its own artifact (not discarded) even though only the
-/// filtered form feeds this crate's training corpus — the full Korean phonetic detail
-/// (palatalization, aspiration, coda filler vowels) that gets dropped here is exactly
-/// the kind of data a future Korean TTS/ASR model would want, so it's kept rather than
-/// thrown away.
+/// Returns (space-joined phonemes that verifiably round-trip back to `hangul` via
+/// p2g, real-pronunciation IPA kept only as a byproduct for a future Korean
+/// TTS/ASR use -- not fed into this crate's training corpus). `None` if `hangul`
+/// uses a syllable shape p2g's forward table can never produce at all, or the
+/// reverse tokens don't actually round-trip (the already-known W-glide
+/// onset-vs-coda ambiguity, or a written batchim immediately before a null-onset
+/// vowel syllable, both irreducible in p2g's current phoneme alphabet -- see
+/// reverse.rs's module doc) -- either way, writing that pair would teach the model
+/// to reproduce something it structurally cannot, so it's skipped rather than
+/// trained wrong.
 fn hangul_to_ipa(hangul: &str) -> Option<(String, String)> {
-    let phonemized = korean_phonemizer::phonemize_ko(hangul).ok()?;
-    let mut filtered = tokenize_ipa(&phonemized.ipa);
-    if let Some((voiceless, voiced)) = word_initial_lenis_voicing_correction(hangul) {
-        if let Some(first) = filtered.first_mut() {
-            if first == voiceless {
-                *first = voiced.to_string();
-            }
-        }
+    let tokens = korean_transliteration::reverse::hangul_to_phonemes(hangul)?;
+    if korean_transliteration::p2g::phonemes_to_hangul(&tokens) != hangul {
+        return None;
     }
-    if filtered.is_empty() {
-        None
-    } else {
-        Some((filtered.join(" "), phonemized.ipa))
-    }
+    let raw = korean_phonemizer::phonemize_ko(hangul)
+        .map(|p| p.ipa)
+        .unwrap_or_default();
+    Some((tokens.join(" "), raw))
 }
 
 fn main() {
@@ -211,7 +90,7 @@ fn main() {
                 written += 1;
             }
             None => {
-                eprintln!("skip (no usable phonemes): {word} ({hangul})");
+                eprintln!("skip (no round-tripping phoneme encoding): {word} ({hangul})");
                 skipped += 1;
             }
         }
@@ -224,75 +103,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tokenizes_plain_affricate_as_dz() {
-        // "가지" (garbage's second syllable) -> k a d\u{361}\u{255}i; the affricate must
-        // survive as one "dʒ" token, not collapse to a bare "d".
-        assert_eq!(
-            tokenize_ipa("kad\u{361}\u{255}i"),
-            vec!["k", "a", "dʒ", "i"]
-        );
-    }
-
-    #[test]
-    fn tokenizes_aspirated_affricate_as_tsh_before_plain_prefix_matches() {
-        // "지피티" (GPT) -> t\u{361}\u{255}ipʰit\u{361}\u{255}\u{2b0}i; the aspirated form
-        // must win over its own unaspirated prefix.
-        assert_eq!(
-            tokenize_ipa("t\u{361}\u{255}ipʰit\u{361}\u{255}\u{2b0}i"),
-            vec!["dʒ", "i", "p", "i", "tʃ", "i"]
-        );
-    }
-
-    #[test]
-    fn tokenizes_tense_affricate_as_dz() {
-        assert_eq!(
-            tokenize_ipa("at\u{348}\u{361}\u{255}a"),
-            vec!["a", "dʒ", "a"]
-        );
-    }
-
-    #[test]
-    fn drops_unrecognized_characters_but_keeps_the_neutral_syllable_marker() {
-        // Aspiration/tense marks carry no P2G target and are dropped, but ɯ (the
-        // neutral-syllable marker P2G's Unit::NeutralSyllable consumes) is kept.
-        assert_eq!(tokenize_ipa("tʰɯs͈ɯ"), vec!["t", "ɯ", "s", "ɯ"]);
-    }
-
-    #[test]
-    fn corrects_word_initial_lenis_stop_voicing_for_bbc() {
-        // "비비시" phonemizes with a devoiced word-initial ㅂ ([p], correct Korean
-        // acoustics), which would otherwise train "BBC" on a lost B.
-        let (filtered, raw) = hangul_to_ipa("비비시").unwrap();
-        assert_eq!(filtered, "b i b i s i");
-        assert!(raw.starts_with('p'), "raw acoustic form must stay untouched: {raw:?}");
-    }
-
-    #[test]
-    fn does_not_correct_a_genuinely_aspirated_word_initial_consonant() {
-        // "커피" (coffee) starts with ㅋ (aspirated K), which already renders as "k" --
-        // there is no voiceless/voiced pair to correct here.
-        let (filtered, _) = hangul_to_ipa("커피").unwrap();
-        assert_eq!(filtered, "k ʌ p i");
-    }
-
-    #[test]
-    fn remaps_korean_phonemizers_ae_symbol_to_match_p2gs_english_ipa_convention() {
-        // korean_phonemizer's medial_to_ipa follows traditional Korean IPA, where ㅐ
-        // is "ɛ" and ㅔ is "e" -- but korean-transliteration's P2G table follows the
-        // English-IPA convention this corpus is trained to decode (CMUdict/misaki:
-        // "ɛ" is the vowel in "bed", mapping to ㅔ; "æ" is the vowel in "cat",
-        // mapping to ㅐ). Left unmapped, every Hangul-answer-derived ㅐ in the
-        // corpus (e.g. "bank" 뱅크) silently trained the model to round-trip it back
-        // as ㅔ instead.
-        let (filtered, _) = hangul_to_ipa("뱅크").unwrap();
-        assert_eq!(filtered, "b æ ŋ k ɯ");
-    }
-
-    #[test]
     fn accepts_words_with_non_ascii_letters_but_rejects_multi_word_phrases() {
         assert!(is_clean_word("Königen"));
         assert!(is_clean_word("Fräulein"));
         assert!(!is_clean_word("Guido van Rossum"));
         assert!(!is_clean_word(""));
+    }
+
+    #[test]
+    fn converts_a_real_answer_into_its_round_tripping_phonemes() {
+        let (filtered, _) = hangul_to_ipa("커피").unwrap();
+        assert_eq!(filtered, "k ʌ p i");
+    }
+
+    #[test]
+    fn does_not_lateralize_walnut_the_way_the_old_real_pronunciation_pipeline_did() {
+        // korean_phonemizer's phonemize_ko("월넛") used to return "월럳" (Korean's
+        // own ㄹ+ㄴ lateralization, applied by g2pk::G2p::convert() before
+        // korean_phonemizer's own code even runs) -- p2g had no way to undo that,
+        // so training on it could never reproduce "월넛" again. The literal
+        // reverse has no such phonology to apply in the first place.
+        let (filtered, _) = hangul_to_ipa("월넛").unwrap();
+        let tokens: Vec<String> = filtered.split(' ').map(String::from).collect();
+        assert_eq!(korean_transliteration::p2g::phonemes_to_hangul(&tokens), "월넛");
+    }
+
+    #[test]
+    fn skips_an_unrepresentable_batchim_instead_of_training_a_lossy_guess() {
+        // 힣 (ㅎ+ㅣ+ㅎ): a ㅎ batchim is not one of the seven batchim jamo p2g's
+        // own as_tail can ever output, so no phoneme sequence could round-trip
+        // through it either way -- must be skipped, not silently guessed.
+        assert!(hangul_to_ipa("힣").is_none());
     }
 }
