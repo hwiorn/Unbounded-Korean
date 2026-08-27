@@ -69,6 +69,7 @@ fn vowel_encoding(vowel: char) -> VowelEncoding {
         'ㅏ' => Plain("a"),
         'ㅐ' => Plain("æ"),
         'ㅑ' => Glide("j", "a"),
+        'ㅒ' => Glide("j", "æ"),
         'ㅓ' => Plain("ʌ"),
         'ㅔ' => Plain("e"),
         'ㅕ' => Glide("j", "ʌ"),
@@ -84,7 +85,7 @@ fn vowel_encoding(vowel: char) -> VowelEncoding {
         'ㅠ' => Glide("j", "u"),
         'ㅡ' => Neutral,
         'ㅣ' => Plain("i"),
-        // ㅚ/ㅢ/ㅒ: no `resolve_onset_vowel`/`unit_for` arm produces these at all.
+        // ㅚ/ㅢ: no `resolve_onset_vowel`/`unit_for` arm produces these at all.
         _ => Unsupported,
     }
 }
@@ -193,6 +194,7 @@ mod tests {
         round_trips("컴퓨터"); // 퓨 = ㅍ onset + ㅠ (j,u) glide vowel
         round_trips("패션"); // 션 = ㅅ onset + ㅕ (j,ʌ) glide vowel
         round_trips("워터"); // 워 = null onset + ㅝ (w,ʌ) glide vowel
+        round_trips("섕크스"); // 섕 = ㅅ onset + ㅒ (j,æ) glide vowel + ㅇ batchim
     }
 
     #[test]

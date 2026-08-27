@@ -214,6 +214,14 @@ fn resolve_onset_vowel(onset: OnsetCandidate, vowel: char) -> (char, char) {
         (OnsetCandidate::Glide('W'), 'ㅣ') => ('ㅇ', 'ㅟ'),
         (OnsetCandidate::Glide('W'), 'ㅜ') => ('ㅇ', 'ㅜ'),
         (OnsetCandidate::Glide('Y'), 'ㅏ') => ('ㅇ', 'ㅑ'),
+        // "Shanks" 섕(ㅅ+ㅒ+ㅇ), "Chamblee" 섐(ㅅ+ㅒ+ㅁ): korean_go.tsv's own
+        // established answers for these, the same Y+æ pattern "shadow" 섀
+        // already uses without a glide onset in front of it -- these are just
+        // the first words this table needed it for with one. Missing this arm
+        // meant reverse::hangul_to_phonemes had no way to encode ㅒ at all, so
+        // both answers failed round-trip verification and silently fell back
+        // to a lower-priority source's plain-ㅐ spelling (생크스/챔블리) instead.
+        (OnsetCandidate::Glide('Y'), 'ㅐ') => ('ㅇ', 'ㅒ'),
         // ㅓ and ㅔ produce DIFFERENT compounds (여 vs 예) -- previously merged
         // into 'ㅖ' for both, which mis-rendered every Y+ㅓ syllable ("passion"
         // -> 션 needs 여, not 예).
@@ -697,6 +705,16 @@ mod tests {
         // compound 'ㅖ' (ye) for a Y glide onset; they're different vowels --
         // 'ㅓ' must produce 'ㅕ' (yeo) instead.
         assert_eq!(phonemes_to_hangul(&tokens(&["j", "ʌ"])), "여");
+    }
+
+    #[test]
+    fn y_glide_plus_ae_produces_the_yae_compound() {
+        // "Shanks" 섕: korean_go.tsv's own established answer, the same Y+æ
+        // pattern "shadow" 섀 already uses without a preceding onset consonant
+        // -- missing this arm meant reverse::hangul_to_phonemes had no way to
+        // encode ㅒ at all, so "섕크스"/"섐블리" failed round-trip verification
+        // and silently fell back to a lower-priority plain-ㅐ answer instead.
+        assert_eq!(phonemes_to_hangul(&tokens(&["s", "j", "æ", "ŋ"])), "섕");
     }
 
     #[test]
