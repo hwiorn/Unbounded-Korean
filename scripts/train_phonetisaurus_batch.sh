@@ -51,6 +51,7 @@ docker build --platform linux/amd64 -f docker/phonetisaurus-train.Dockerfile -t 
 
 TRAINED=()
 SKIPPED=()
+FAILED=()
 for LANG_CODE in "${LANGS[@]}"; do
   LINES=$(wc -l < "data/corpus/${LANG_CODE}.dict")
   if [ "$LINES" -lt 5 ]; then
@@ -68,6 +69,14 @@ for LANG_CODE in "${LANGS[@]}"; do
     ORDER=$((LINES - 1))
   fi
   echo "=== training ${LANG_CODE} (${LINES} entries, ngram_order=${ORDER}) ==="
+  # A raw line count doesn't predict alignment success -- e.g. Chinese's
+  # multi-character-per-name entries mostly fail phonetisaurus-align outright,
+  # leaving too few ALIGNED pairs for estimate-ngram regardless of how many
+  # raw .dict lines there were, which segfaults it the same way a too-small
+  # LINES would. Isolate each language's training in its own subshell instead
+  # of predicting this in advance, so one language's crash can't take the
+  # whole batch down with it (set -e is intentionally suspended only here).
+  set +e
   docker run --rm --platform linux/amd64 -v "$WORKDIR/data:/work/data" phonetisaurus-train \
     bash -c '
       set -euo pipefail
@@ -80,6 +89,13 @@ for LANG_CODE in "${LANGS[@]}"; do
       "$BIN/estimate-ngram" -o '"${ORDER}"' -t "/work/data/train/'"${LANG_CODE}"'.model.corpus" -wl "/work/data/train/'"${LANG_CODE}"'.model.arpa"
       "$BIN/phonetisaurus-arpa2wfst" --lm="/work/data/train/'"${LANG_CODE}"'.model.arpa" --ofile="/work/data/'"${LANG_CODE}"'.fst"
     '
+  STATUS=$?
+  set -e
+  if [ "$STATUS" -ne 0 ]; then
+    echo "=== ${LANG_CODE} training failed (exit ${STATUS}), leaving its existing .fst.gz untouched ==="
+    FAILED+=("${LANG_CODE}(exit ${STATUS})")
+    continue
+  fi
   gzip -kf "data/${LANG_CODE}.fst"
   rm -f "data/${LANG_CODE}.fst"
   git add "data/${LANG_CODE}.fst.gz"
@@ -87,6 +103,7 @@ for LANG_CODE in "${LANGS[@]}"; do
 done
 echo "trained: ${TRAINED[*]:-none}"
 echo "skipped (too little data): ${SKIPPED[*]:-none}"
+echo "failed (training error): ${FAILED[*]:-none}"
 
 if [ "${#TRAINED[@]}" -gt 0 ]; then
   git commit -m "data: batch-train $(IFS=,; echo "${TRAINED[*]}") .fst.gz on $(hostname)"
