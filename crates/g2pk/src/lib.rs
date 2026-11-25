@@ -9,5 +9,5 @@ mod rules;
 
 pub use error::{Error, Result};
 pub use g2p::{G2p, G2pConfig, G2pOptions};
-pub use morph::{Morpheme, PosTagger};
+pub use morph::{LinderaTagger, Morpheme, PosTagger};
 pub use resources::{ResourceConfig, RuleEntry};

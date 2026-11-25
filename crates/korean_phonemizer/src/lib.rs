@@ -498,4 +498,13 @@ mod tests {
         let initial = phonemize_ko("의사").unwrap().ipa;
         assert!(initial.starts_with("ɰisa"), "{initial}");
     }
+
+    #[test]
+    fn adnominal_rieul_tenses_following_consonant() {
+        // ko-dic fuses 하/VV + ᆯ/ETM into one token tagged "VV+ETM"; the ETM must still tense.
+        let out = phonemize_ko("할 수 있습니다").unwrap().ipa;
+        assert!(out.starts_with("hal s͈u"), "{out}");
+        let out = phonemize_ko("하길 바라는").unwrap().ipa;
+        assert!(out.starts_with("hagil pa"), "{out}");
+    }
 }

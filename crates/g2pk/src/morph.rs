@@ -40,7 +40,7 @@ impl PosTagger for LinderaTagger {
         let mut out = Vec::with_capacity(tokens.len());
         for token in tokens.iter_mut() {
             let details = token.details();
-            let pos = details.first().copied().unwrap_or("UNK").to_string();
+            let pos = tag_of(&details);
             out.push(Morpheme {
                 surface: token.surface.as_ref().to_string(),
                 pos,
@@ -50,4 +50,26 @@ impl PosTagger for LinderaTagger {
         }
         Ok(out)
     }
+}
+
+/// ko-dic fuses an inflected stem and its trailing ending into one token ("할" = 하/VV + ᆯ/ETM).
+/// When the ending is a lone final consonant it lives inside the last syllable, so that
+/// syllable carries the ending's tag; otherwise the token keeps its leading component's tag.
+fn tag_of(details: &[&str]) -> String {
+    let leading = |pos: &str| pos.split('+').next().unwrap_or("UNK").to_string();
+    let first = details.first().copied().unwrap_or("UNK");
+    if let Some(expression) = details.get(7) {
+        if let Some(last) = expression.split('+').last() {
+            let mut parts = last.split('/');
+            let surface = parts.next().unwrap_or("");
+            let pos = parts.next().unwrap_or("");
+            let mut chars = surface.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
+                if ('\u{11A8}'..='\u{11C2}').contains(&c) && !pos.is_empty() {
+                    return pos.to_string();
+                }
+            }
+        }
+    }
+    leading(first)
 }
