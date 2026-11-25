@@ -85,7 +85,10 @@ pub fn phonemize_ko_with_options(text: &str, options: &PhonemizerOptions) -> Res
     let g2p = G2P.get_or_try_init(G2p::new)?;
     let spoken = g2p.convert(text)?;
     let ipa = match options.mode {
-        PhonemizerMode::Kog2pTable => korean_to_ipa(&spoken, options),
+        PhonemizerMode::Kog2pTable => {
+            let josa_ui = josa_ui_for(g2p, text, &spoken);
+            korean_to_ipa_with_josa(&spoken, options, &josa_ui)
+        }
         PhonemizerMode::Epitran => epitran_korean_to_ipa(&spoken)?,
     };
     Ok(Phonemized { spoken, ipa })
@@ -102,7 +105,26 @@ pub fn epitran_korean_to_ipa(spoken: &str) -> Result<String> {
         .map_err(|err| Error::Epitran(err.to_string()))
 }
 
+/// Syllable indexes of possessive 의 in `spoken`. The tagger runs on the original text, so the
+/// indexes only carry over when both texts have the same number of Hangul syllables; otherwise
+/// (numerals or English were rewritten) no 의 is treated as a particle.
+fn josa_ui_for(g2p: &G2p, text: &str, spoken: &str) -> Vec<usize> {
+    let syllables = |s: &str| s.chars().filter(|c| hangul::decompose_char(*c).is_some()).count();
+    if syllables(text) != syllables(spoken) {
+        return Vec::new();
+    }
+    g2p.josa_ui_syllables(text).unwrap_or_default()
+}
+
 pub fn korean_to_ipa(spoken: &str, options: &PhonemizerOptions) -> String {
+    korean_to_ipa_with_josa(spoken, options, &[])
+}
+
+pub fn korean_to_ipa_with_josa(
+    spoken: &str,
+    options: &PhonemizerOptions,
+    josa_ui: &[usize],
+) -> String {
     let chars: Vec<char> = spoken.chars().collect();
     let mut result = Vec::new();
     let mut prev_coda: Option<char> = None;
@@ -132,13 +154,13 @@ pub fn korean_to_ipa(spoken: &str, options: &PhonemizerOptions) -> String {
 
         let mut nucleus = medial_to_ipa(vowel).to_string();
 
-        // ㅢ follows standard Korean pronunciation: word-initial [ɰi],
-        // medial [i], with optional colloquial [ɛ] for possessive-like use.
+        // ㅢ: word-initial [ɰi]; the possessive particle 의 is [ɰi] (colloquial [ɛ]); any other
+        // medial ㅢ is [i].
         if vowel == 'ᅴ' {
             if at_word_start {
                 nucleus = "ɰi".to_string();
-            } else if options.colloquial && syllable_index > 0 {
-                nucleus = "ɛ".to_string();
+            } else if josa_ui.contains(&syllable_index) {
+                nucleus = if options.colloquial { "ɛ" } else { "ɰi" }.to_string();
             } else {
                 nucleus = "i".to_string();
             }
@@ -465,5 +487,15 @@ mod tests {
             assert!(!korean_to_ipa(word, &opts).contains('͈'), "{word}");
         }
         assert!(korean_to_ipa("학꾜", &opts).contains('͈'));
+    }
+
+    #[test]
+    fn ui_is_ɰi_for_particle_and_word_initial() {
+        let josa = phonemize_ko("정부의 잘못이 아니다").unwrap().ipa;
+        assert!(josa.starts_with("t͡ɕʌŋbuɰi "), "{josa}");
+        let tagged_as_josa = phonemize_ko("건의사항 있으십니까").unwrap().ipa;
+        assert!(tagged_as_josa.starts_with("kʌnɰisahaŋ "), "{tagged_as_josa}");
+        let initial = phonemize_ko("의사").unwrap().ipa;
+        assert!(initial.starts_with("ɰisa"), "{initial}");
     }
 }

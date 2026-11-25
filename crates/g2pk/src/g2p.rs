@@ -52,6 +52,23 @@ impl G2p {
         })
     }
 
+    /// Hangul-syllable indexes (counted over `text`) of every 의 that the tagger marks as a
+    /// possessive particle (JKG).
+    pub fn josa_ui_syllables(&self, text: &str) -> Result<Vec<usize>> {
+        let mut out = Vec::new();
+        for m in self.tagger.tag(text)? {
+            if m.surface == "의" && m.pos == "JKG" {
+                out.push(
+                    text[..m.start]
+                        .chars()
+                        .filter(|c| hangul::decompose_char(*c).is_some())
+                        .count(),
+                );
+            }
+        }
+        Ok(out)
+    }
+
     pub fn convert(&self, text: &str) -> Result<String> {
         self.convert_with_options(text, &G2pOptions::new())
     }
