@@ -123,24 +123,10 @@ pub fn korean_to_ipa(spoken: &str, options: &PhonemizerOptions) -> String {
 
         let mut onset = initial_to_ipa(lead, options.ipa_style).to_string();
 
-        // Lateralization (유음화): ㄴ+ㄹ and ㄹ+ㄴ surface as ㄹ+ㄹ.
-        let lateral = matches!(
-            (prev_coda, lead),
-            (Some('ᆫ'), 'ᄅ') | (Some('ᆯ'), 'ᄂ') | (Some('ᆯ'), 'ᄅ')
-        );
-
-        // Progressive nasalization: ㅁ/ㅇ + ㄹ surfaces as ㅁ/ㅇ + ㄴ.
-        let progressive_nasal = matches!((prev_coda, lead), (Some('ᆷ'), 'ᄅ') | (Some('ᆼ'), 'ᄅ'));
-
-        // Onset ㄹ is [n] after progressive nasalization, [l] in lateral or
-        // Epitran-compatible contexts, and [ɾ] medially otherwise.
-        if lead == 'ᄅ' {
-            if progressive_nasal {
-                onset = "n".to_string();
-            } else if lateral || options.epitran_compat || is_word_final(&chars, i + 1) {
-                onset = "l".to_string();
-            }
-        } else if lead == 'ᄂ' && lateral {
+        // 유음화·ㄹ의 비음화·경음화는 g2pk spoken 형에 이미 반영돼 있다(단어 안에서만). 받침-초성
+        // 인접으로 다시 적용하면 어절을 넘어 "를 넣"이 "를 러"로, 감사가 감싸로 바뀐다.
+        // Onset ㄹ is [l] in Epitran-compatible or word-final contexts, [ɾ] medially otherwise.
+        if lead == 'ᄅ' && (options.epitran_compat || is_word_final(&chars, i + 1)) {
             onset = "l".to_string();
         }
 
@@ -197,19 +183,6 @@ pub fn korean_to_ipa(spoken: &str, options: &PhonemizerOptions) -> String {
         // become g/d/b/d͡ɕ after vowels or sonorant codas.
         if !at_word_start && is_voicing_context(prev_coda) {
             onset = voice_onset(&onset, options.ipa_style);
-        }
-
-        // Tensification (경음화): after selected codas, plain obstruent onsets
-        // become tense if they have not already been changed by another rule.
-        if !at_word_start && is_tensification_trigger(prev_coda) {
-            onset = tensify(lead, &onset, options.ipa_style);
-        }
-
-        // When ㄴ+ㄹ lateralizes, the previous syllable's coda changes too.
-        if lateral && prev_coda == Some('ᆫ') {
-            if let Some(last) = result.last_mut() {
-                *last = last.replace('n', "l");
-            }
         }
 
         let syllable = format!("{onset}{nucleus}{coda}");
@@ -326,30 +299,6 @@ fn voice_onset(onset: &str, style: IpaStyle) -> String {
         ("tɕ", IpaStyle::Simplified) => "dɕ".to_string(),
         _ => onset.to_string(),
     }
-}
-
-fn is_tensification_trigger(prev: Option<char>) -> bool {
-    matches!(
-        prev,
-        Some('ᆨ' | 'ᆩ' | 'ᆪ' | 'ᆫ' | 'ᆮ' | 'ᆯ' | 'ᆷ' | 'ᆸ' | 'ᆹ' | 'ᆺ' | 'ᆻ' | 'ᆼ')
-    )
-}
-
-fn tensify(lead: char, onset: &str, style: IpaStyle) -> String {
-    let tense = match (lead, style) {
-        ('ᄀ', IpaStyle::Combining) if onset == "k" => "k͈",
-        ('ᄀ', IpaStyle::Simplified) if onset == "k" => "kk",
-        ('ᄃ', IpaStyle::Combining) if onset == "t" => "t͈",
-        ('ᄃ', IpaStyle::Simplified) if onset == "t" => "tt",
-        ('ᄇ', IpaStyle::Combining) if onset == "p" => "p͈",
-        ('ᄇ', IpaStyle::Simplified) if onset == "p" => "pp",
-        ('ᄉ', IpaStyle::Combining) if onset == "s" => "s͈",
-        ('ᄉ', IpaStyle::Simplified) if onset == "s" => "ss",
-        ('ᄌ', IpaStyle::Combining) if onset == "t͡ɕ" => "t͈͡ɕ",
-        ('ᄌ', IpaStyle::Simplified) if onset == "tɕ" => "ttɕ",
-        _ => onset,
-    };
-    tense.to_string()
 }
 
 fn to_compat_jamo(text: &str) -> String {
@@ -505,5 +454,16 @@ mod tests {
         assert_eq!(korean_to_ipa("어디", &opts), "ʌdi");
         assert_eq!(korean_to_ipa("마디", &opts), "madi");
         assert_eq!(korean_to_ipa("느티나무", &opts), "nɯtʰinamu");
+    }
+
+    #[test]
+    fn does_not_reapply_assimilation_that_g2pk_already_decided() {
+        let opts = PhonemizerOptions::default();
+        assert!(korean_to_ipa("를 너", &opts).ends_with("nʌ"));
+        assert!(korean_to_ipa("감 나", &opts).ends_with("na"));
+        for word in ["감사", "인사", "선생", "방송", "관심"] {
+            assert!(!korean_to_ipa(word, &opts).contains('͈'), "{word}");
+        }
+        assert!(korean_to_ipa("학꾜", &opts).contains('͈'));
     }
 }

@@ -1,6 +1,7 @@
 use crate::{Error, Result};
 use regex::Regex;
 
+const WORD_INTERNAL_RULE_IDS: [&str; 2] = ["19", "20"];
 const BUILTIN_TABLE: &str = include_str!("resources/table.csv");
 const BUILTIN_IDIOMS: &str = include_str!("resources/idioms.txt");
 
@@ -103,6 +104,15 @@ pub fn parse_table(src: &str) -> Result<Vec<RuleEntry>> {
             } else {
                 (cell.to_string(), Vec::new())
             };
+            // 표준발음법 19·20항(ㄹ의 비음화, ㄴ↔ㄹ 유음화)과 ㄹ 초성이 ㄴ으로 바뀌는 칸은 한 단어
+            // 안에서만 적용된다. 받침-초성 사이 공백 허용(`( ?)`)을 빼서 어절을 넘지 않게 한다.
+            let word_internal = onset.ends_with('ᄅ')
+                || rule_ids.iter().any(|id| WORD_INTERNAL_RULE_IDS.contains(&id.as_str()));
+            let onset = if word_internal {
+                onset.replacen("( ?)", "()", 1)
+            } else {
+                onset.to_string()
+            };
             entries.push(RuleEntry {
                 from: format!("{coda}{onset}"),
                 to,
@@ -148,5 +158,29 @@ mod tests {
         assert_eq!(resources.table[0].replacement, "ᆨᄁ");
         assert_eq!(resources.idioms[0].0.as_str(), "abc");
         assert_eq!(resources.idioms[0].1, "def");
+    }
+
+    fn table_output(text: &str) -> String {
+        let resources = Resources::load(&ResourceConfig::default()).unwrap();
+        crate::hangul::compose(&crate::rules::apply_table(
+            crate::hangul::decompose(text),
+            &resources.table,
+        ))
+    }
+
+    #[test]
+    fn liquid_and_rieul_onset_rules_do_not_cross_a_word_boundary() {
+        assert_eq!(table_output("를 넣"), "를 넏");
+        assert_eq!(table_output("물 나요"), "물 나요");
+        assert_eq!(table_output("책 라디오"), "책 라디오");
+        assert_eq!(table_output("옷 라디오"), "옫 라디오");
+    }
+
+    #[test]
+    fn liquid_and_rieul_onset_rules_apply_inside_a_word() {
+        assert_eq!(table_output("칼날"), "칼랄");
+        assert_eq!(table_output("신라"), "실라");
+        assert_eq!(table_output("막론"), "망논");
+        assert_eq!(table_output("협력"), "혐녁");
     }
 }
